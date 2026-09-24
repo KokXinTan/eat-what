@@ -4,7 +4,7 @@ import type { AppData } from './types';
 
 function sample(): AppData {
   const d = freshData();
-  d.prefs = { diets: ['halal'], budget: 2, distance: 'walk', sound: true };
+  d.prefs = { diets: ['halal'], budget: 2, distance: 'walk', sound: true, showClosed: true };
   d.picks = [{ id: 'p1', placeId: 'g:abc', name: 'Nasi Lemak Corner', food: 'Malaysian', art: 'nasiLemak', mapsUrl: 'https://maps.google.com/?cid=1', date: '2026-09-20T12:00:00.000Z', verdict: 'up' }];
   d.skips = [{ placeId: 'osm:node/1', date: '2026-09-21T12:00:00.000Z' }];
   d.group = [{ id: 'g1', name: 'Aina', diets: ['vegetarian'], budget: 1 }];

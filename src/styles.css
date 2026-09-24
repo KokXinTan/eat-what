@@ -1363,9 +1363,9 @@ main {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-height: 38px;
-  padding: 0 11px;
+  padding: 0 10px;
   border: 1.5px solid var(--line-strong);
   border-radius: 999px;
   background: var(--card-2);
@@ -1415,8 +1415,8 @@ main {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 18px;
-  padding: 14px 0 calc(12px + env(safe-area-inset-bottom));
+  gap: 12px;
+  padding: 10px 0 calc(6px + env(safe-area-inset-bottom));
 }
 .round {
   width: 64px;
@@ -1425,6 +1425,13 @@ main {
 .round-yes {
   width: 74px;
   height: 74px;
+}
+.round-small {
+  width: 44px;
+  height: 44px;
+  border-width: 2px;
+  box-shadow: 0 3px 0 var(--line-strong);
+  color: var(--ink-2);
 }
 .round-undo {
   width: 44px;
@@ -1452,6 +1459,13 @@ main {
   text-align: center;
   font-size: 0.8rem;
   font-weight: 700;
+  color: var(--muted);
+}
+.chosen-links {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
   color: var(--muted);
 }
 .chosen-actions {

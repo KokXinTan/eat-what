@@ -5,10 +5,10 @@ import type { ArtKind } from './types';
 const RULES: [RegExp, ArtKind][] = [
   [/nasi lemak/i, 'nasiLemak'],
   [/roti|naan|prata|thosai|dosa|chapati|capati|mamak|nasi kandar/i, 'roti'],
-  [/ramen|laksa|pho|soup|sup\b|bak kut teh|curry mee|wantan|wonton|pan mee|yong tau foo|noodle house|vietnamese/i, 'noodleSoup'],
+  [/ramen|laksa|\bpho\b|soup|sup\b|bak kut teh|curry mee|wantan|wonton|pan mee|yong tau foo|noodle house|vietnamese/i, 'noodleSoup'],
   [/fried rice|nasi goreng|biryani|briyani/i, 'friedRice'],
-  [/goreng|char kway|kway teow|hokkien mee|noodle|mee\b|udon|soba|maggi|thai/i, 'friedNoodles'],
-  [/sushi|sashimi|japanese|bento|donburi|izakaya|dumpling|dim sum|korean/i, 'sushi'],
+  [/goreng|char kway|kway teow|hokkien mee|noodle|mee\b|\budon\b|\bsoba\b|maggi|thai/i, 'friedNoodles'],
+  [/sushi|sashimi|japanese|\bbento\b|donburi|izakaya|dumpling|dim sum|korean/i, 'sushi'],
   [/curry|kari|dhal|rendang|masala|indian|banana leaf|middle.?eastern|turkish|lebanese|afghan/i, 'curry'],
   [/porridge|congee|bubur/i, 'porridge'],
   [/pasta|spaghetti|italian|pizza|mediterranean|french|spanish|greek/i, 'pasta'],

@@ -294,6 +294,7 @@ export function fromGoogle(p: GPlace, center: LatLng, photoUrl: (name: string) =
     distanceM: distanceM(center, at),
     openNow: status.open,
     closesInMin: status.minsLeft,
+    opensAt: status.opensAt,
     hoursToday: status.until,
     address: p.shortFormattedAddress ?? '',
     mapsUrl: p.googleMapsUri ?? mapsSearchUrl(name, at, p.id),
@@ -338,7 +339,14 @@ const WEEK_MIN = 7 * 24 * 60;
  * Open right now, and until when, from Google's weekly opening periods and the place's UTC
  * offset. (Place.isOpen() is beta-only, so we compute it ourselves.)
  */
-export function openStatus(periods: Period[] | undefined, utcOffsetMinutes: number | undefined, now = new Date()): { open: boolean | null; until?: string; minsLeft?: number } {
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function clock(hour: number, minute: number): string {
+  const h = hour % 12 || 12;
+  return `${h}${minute ? `:${String(minute).padStart(2, '0')}` : ''} ${hour < 12 ? 'am' : 'pm'}`;
+}
+
+export function openStatus(periods: Period[] | undefined, utcOffsetMinutes: number | undefined, now = new Date()): { open: boolean | null; until?: string; minsLeft?: number; opensAt?: string } {
   if (!periods?.length || utcOffsetMinutes === undefined) return { open: null };
   if (periods.length === 1 && !periods[0].close) return { open: true, until: '24 hours' };
   const local = new Date(now.getTime() + utcOffsetMinutes * 60_000);
@@ -350,21 +358,23 @@ export function openStatus(periods: Period[] | undefined, utcOffsetMinutes: numb
     if (end <= start) end += WEEK_MIN;
     const tt = t < start ? t + WEEK_MIN : t;
     if (tt >= start && tt < end) {
-      const h = p.close.hour % 12 || 12;
-      const m = p.close.minute ? `:${String(p.close.minute).padStart(2, '0')}` : '';
-      return { open: true, until: `until ${h}${m} ${p.close.hour < 12 ? 'am' : 'pm'}`, minsLeft: end - tt };
+      return { open: true, until: `until ${clock(p.close.hour, p.close.minute)}`, minsLeft: end - tt };
     }
   }
-  return { open: false };
+  // Closed: find the next opening in the week.
+  let next: Period | undefined;
+  let wait = Infinity;
+  for (const p of periods) {
+    const start = p.open.day * 1440 + p.open.hour * 60 + p.open.minute;
+    const w = (start - t + WEEK_MIN) % WEEK_MIN;
+    if (w < wait) [wait, next] = [w, p];
+  }
+  if (!next) return { open: false };
+  const today = local.getUTCDay() === next.open.day && wait < 1440;
+  return { open: false, opensAt: `opens ${today ? '' : `${DAY_NAMES[next.open.day]} `}${clock(next.open.hour, next.open.minute)}` };
 }
 
-/** Alternate Google's ordering by day: popular places one day, closest (often smaller, local) the next. */
-export function dailyRank(now = new Date()): 'POPULARITY' | 'DISTANCE' {
-  const day = Math.floor((now.getTime() - now.getTimezoneOffset() * 60_000) / 86_400_000);
-  return day % 2 ? 'DISTANCE' : 'POPULARITY';
-}
-
-async function searchGoogle(center: LatLng, radius: number, textQuery: string | null): Promise<Restaurant[]> {
+async function searchGoogle(center: LatLng, radius: number, textQuery: string | null, page: number): Promise<Restaurant[]> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), SEARCH_TIMEOUT_MS);
   let res: Response;
@@ -372,7 +382,7 @@ async function searchGoogle(center: LatLng, radius: number, textQuery: string | 
     res = await fetch(`${PROXY_URL}/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Access-Code': getAccessCode() },
-      body: JSON.stringify({ lat: center.lat, lng: center.lng, radius, query: textQuery, rank: dailyRank() }),
+      body: JSON.stringify({ lat: center.lat, lng: center.lng, radius, query: textQuery, page }),
       signal: ctl.signal,
     });
   } catch {
@@ -425,14 +435,23 @@ function writeCache(key: string, list: Restaurant[]) {
 }
 
 /** Reuses a search for the same ~100 m area, radius and diet for up to 30 minutes. */
-export async function findRestaurants(center: LatLng, distance: Distance, textQuery: string | null): Promise<Restaurant[]> {
+/** Google pages: 0 popular, 1 closest, 2–11 niche searches (the Worker's NICHE list). */
+export const LAST_GOOGLE_PAGE = 11;
+
+/** Whether another page of places can be loaded (OpenStreetMap returns everything at once). */
+export function hasMorePages(page: number): boolean {
+  return currentSource() === 'google' && page < LAST_GOOGLE_PAGE;
+}
+
+export async function findRestaurants(center: LatLng, distance: Distance, textQuery: string | null, page = 0): Promise<Restaurant[]> {
   const radius = RADIUS_M[distance];
-  // OSM ignores the diet words, so they only split the cache for Google.
   const source = currentSource();
-  const key = `${source}:${center.lat.toFixed(3)},${center.lng.toFixed(3)}:${radius}:${source === 'google' ? `${textQuery ?? ''}:${dailyRank()}` : ''}`;
+  if (source === 'osm' && page > 0) return [];
+  // OSM ignores the diet words, so they only split the cache for Google.
+  const key = `${source}:${center.lat.toFixed(3)},${center.lng.toFixed(3)}:${radius}:${source === 'google' ? `${textQuery ?? ''}:${page}` : ''}`;
   const cached = readCache(key);
   if (cached) return cached;
-  const search = source === 'google' ? () => searchGoogle(center, radius, textQuery) : () => searchOsm(center, radius);
+  const search = source === 'google' ? () => searchGoogle(center, radius, textQuery, page) : () => searchOsm(center, radius);
   let found: Restaurant[];
   try {
     found = await search();

@@ -10,6 +10,7 @@ import type { AppData, Budget, DietId, Pick, Restaurant } from './types';
 export const WEIGHTS = {
   ratingPerStar: 2,
   popular: 1,
+  hiddenGem: 1.8,
   closeBy: 1.5,
   openNow: 1,
   newToYou: 1,
@@ -30,6 +31,9 @@ const RECENT_PICK_DAYS = 3;
 /** Skipped places sink for a few days, fading back gradually. */
 const SKIP_MEMORY_DAYS = 5;
 const POPULAR_REVIEWS = 300;
+const GEM_MIN_RATING = 4.4;
+const GEM_MIN_REVIEWS = 15;
+const GEM_MAX_REVIEWS = 250;
 const CLOSE_BY_M = 500;
 /** Ratings pulled towards this with few reviews (Bayesian average). */
 const PRIOR_RATING = 3.8;
@@ -108,7 +112,7 @@ export function buildDeck(list: Restaurant[], data: AppData, seed: string, now: 
   const cards: Card[] = [];
 
   for (const r of list) {
-    if (r.openNow === false) {
+    if (r.openNow === false && !data.prefs.showClosed) {
       drop('closed right now');
       continue;
     }
@@ -135,6 +139,10 @@ export function buildDeck(list: Restaurant[], data: AppData, seed: string, now: 
         text: r.rating >= 4.3 && r.ratingCount >= 50 ? `★ ${r.rating.toFixed(1)} from ${r.ratingCount.toLocaleString('en-MY')} reviews — people love it.` : undefined,
       });
       if (r.ratingCount >= POPULAR_REVIEWS) f.push({ points: WEIGHTS.popular });
+      // Well-rated but little-known: a local favourite the crowds haven't found.
+      if (r.rating >= GEM_MIN_RATING && r.ratingCount >= GEM_MIN_REVIEWS && r.ratingCount < GEM_MAX_REVIEWS) {
+        f.push({ points: WEIGHTS.hiddenGem, text: `A local favourite — ★ ${r.rating.toFixed(1)} from ${r.ratingCount} reviews, fewer crowds.` });
+      }
     }
     if (r.distanceM <= CLOSE_BY_M) {
       f.push({ points: WEIGHTS.closeBy, text: `Just ${distanceLabel(r.distanceM)} away — about ${Math.max(1, Math.round(r.distanceM / WALK_M_PER_MIN))} min on foot.` });
@@ -180,6 +188,7 @@ export function buildDeck(list: Restaurant[], data: AppData, seed: string, now: 
       .map((x) => x.text!)
       .slice(0, 3);
     const headsUp = [
+      ...(r.openNow === false ? [`Closed now${r.opensAt ? ` — ${r.opensAt}` : ''}`] : []),
       ...(r.closesInMin !== undefined && r.closesInMin < CLOSING_SOON_MIN ? [`Closes soon (${r.hoursToday}) — hurry`] : []),
       ...(budget !== null && r.price === null ? ['No price info — check before you go'] : []),
       ...(diet.status === 'unverified' ? diet.notes : []),
@@ -187,7 +196,8 @@ export function buildDeck(list: Restaurant[], data: AppData, seed: string, now: 
     cards.push({ r, score, reasons: reasons.length ? reasons : [fallbackReason(r)], headsUp, diet });
   }
 
-  cards.sort((a, b) => b.score - a.score);
+  // Open places always come first; closed ones (only shown with "Any time") follow, best first.
+  cards.sort((a, b) => Number(a.r.openNow === false) - Number(b.r.openNow === false) || b.score - a.score);
   return { cards, removed: [...removed.entries()].map(([why, n]) => `${n} ${why}`) };
 }
 

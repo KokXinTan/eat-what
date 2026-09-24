@@ -187,7 +187,7 @@ export function Sheet({
 
 
 /** A compact pill that opens the phone's native picker. */
-export function PillSelect<T extends string | number | null>({
+export function PillSelect<T extends string | number | boolean | null>({
   icon,
   label,
   value,
@@ -197,15 +197,16 @@ export function PillSelect<T extends string | number | null>({
   icon: IconName;
   label: string;
   value: T;
-  options: { value: T; label: string }[];
+  /** `short` is shown on the pill; `label` in the phone's picker. */
+  options: { value: T; label: string; short?: string }[];
   onChange: (v: T) => void;
 }) {
   const index = Math.max(0, options.findIndex((o) => o.value === value));
   return (
     <label class="pill pill-select">
       <Icon name={icon} size={15} />
-      <span class="pill-text">{options[index].label}</span>
-      <Icon name="chevron" size={14} class="pill-chevron" />
+      <span class="pill-text">{options[index].short ?? options[index].label}</span>
+      <Icon name="chevron" size={12} class="pill-chevron" />
       <select aria-label={label} value={String(index)} onChange={(e) => onChange(options[Number((e.target as HTMLSelectElement).value)].value)}>
         {options.map((o, i) => (
           <option key={i} value={String(i)}>

@@ -5,7 +5,7 @@ import { CardFace, SwipeCard, type SwipeDir } from './components/SwipeCard';
 import { JoinScreen, RoomScreen } from './components/RoomScreen';
 import { Button, Icon, PillSelect, Sheet } from './components/ui';
 import { DIETS, dietQuery } from './lib/diet';
-import { AccessCodeError, currentSource, findRestaurants, geocode, getLocation, PROXY_URL, setAccessCode, takeCodeFromLink, type LatLng } from './lib/places';
+import { AccessCodeError, currentSource, findRestaurants, geocode, getLocation, hasMorePages, PROXY_URL, setAccessCode, takeCodeFromLink, type LatLng } from './lib/places';
 import { buildDeck, effectiveConstraints, type Card } from './lib/rank';
 import { play } from './lib/sound';
 import { STORAGE_KEY, loadData, newId, saveData } from './lib/storage';
@@ -20,17 +20,25 @@ const LUCKY_POOL = 6;
 const MAX_SKIPS = 300;
 const HINT_KEY = 'eat-what:swipe-hint-seen';
 
-const DISTANCES: { value: Distance; label: string }[] = [
-  { value: 'walk', label: 'Walk · 800 m' },
-  { value: 'near', label: 'Nearby · 2 km' },
-  { value: 'drive', label: 'Drive · 6 km' },
+const DISTANCES: { value: Distance; label: string; short: string }[] = [
+  { value: 'walk', label: 'Walk · within 800 m', short: 'Walk' },
+  { value: 'near', label: 'Nearby · within 2 km', short: 'Nearby' },
+  { value: 'drive', label: 'Short drive · within 6 km', short: 'Drive' },
 ];
-const BUDGETS: { value: AppData['prefs']['budget']; label: string }[] = [
-  { value: null, label: 'Any price' },
-  { value: 1, label: '$ · under RM 20' },
-  { value: 2, label: '$$ · up to RM 40' },
-  { value: 3, label: '$$$ · RM 40+' },
+const BUDGETS: { value: AppData['prefs']['budget']; label: string; short: string }[] = [
+  { value: null, label: 'Any price', short: 'Any $' },
+  { value: 1, label: '$ · under RM 20', short: '$' },
+  { value: 2, label: '$$ · up to RM 40', short: '$$' },
+  { value: 3, label: '$$$ · RM 40+', short: '$$$' },
 ];
+const OPEN_FILTER: { value: boolean; label: string; short: string }[] = [
+  { value: false, label: 'Open now', short: 'Open now' },
+  { value: true, label: 'Any time (include closed places)', short: 'Any time' },
+];
+/** Load the next page of places when this many cards are left. */
+const LOAD_AHEAD = 5;
+/** Stop digging after this many pages in a row add nothing new. */
+const EMPTY_PAGES_LIMIT = 3;
 
 type Phase = 'start' | 'locating' | 'where' | 'loading' | 'rolling' | 'deck' | 'chosen' | 'error';
 type ConfirmOptions = { title: string; body?: string; confirmLabel: string; danger?: boolean };
@@ -44,6 +52,12 @@ export function App() {
   const [center, setCenter] = useState<LatLng | null>(null);
   const [list, setList] = useState<Restaurant[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
+  // Paging: load a few places first, more only when the deck runs low.
+  const [page, setPage] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [exhausted, setExhausted] = useState(false);
+  const [emptyPages, setEmptyPages] = useState(0);
+  const [pendingLucky, setPendingLucky] = useState(false);
   const [removed, setRemoved] = useState<string[]>([]);
   const [index, setIndex] = useState(0);
   /** The diet/budget/group the current deck was ranked for. */
@@ -114,6 +128,9 @@ export function App() {
       const [found] = await Promise.all([findRestaurants(at, d.prefs.distance, dietQuery(ds)), sleep(SHUFFLE_MS)]);
       setList(found);
       deal(found, d);
+      setPage(0);
+      setEmptyPages(0);
+      setExhausted(!hasMorePages(0));
       setPhase('deck');
       if (found.length) play(d.prefs.sound, 'reveal');
     } catch (e) {
@@ -161,6 +178,50 @@ export function App() {
     setData(next);
     if (center && (phase === 'deck' || phase === 'chosen')) search(center, next);
   };
+  const setShowClosed = (showClosed: boolean) => {
+    const next = { ...data, prefs: { ...data.prefs, showClosed } };
+    setData(next);
+    if (phase === 'deck') deal(list, next);
+  };
+
+  /** Fetch the next page of places and add only new ones to the end of the deck. */
+  const loadMore = async () => {
+    if (!center) return;
+    const next = page + 1;
+    setLoadingMore(true);
+    try {
+      const found = await findRestaurants(center, data.prefs.distance, dietQuery(diets), next);
+      const known = new Set(list.map((r) => r.id));
+      const fresh = found.filter((r) => !known.has(r.id));
+      const streak = fresh.length ? 0 : emptyPages + 1;
+      setPage(next);
+      setEmptyPages(streak);
+      if (fresh.length) {
+        setList((l) => [...l, ...fresh]);
+        const added = buildDeck(fresh, data, newId(), new Date()).cards;
+        setCards((cs) => [...cs, ...added.filter((c) => !cs.some((x) => x.r.id === c.r.id))]);
+      }
+      if (!hasMorePages(next) || streak >= EMPTY_PAGES_LIMIT) setExhausted(true);
+    } catch {
+      setExhausted(true); // quietly stop digging; what's already here still works
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  useEffect(() => {
+    if (phase !== 'deck' || loadingMore || exhausted || !center) return;
+    if (cards.length - index <= LOAD_AHEAD) loadMore();
+  }, [phase, index, cards.length, loadingMore, exhausted]);
+
+  // "Feeling lucky" from the start screen: roll as soon as the deck is ready.
+  useEffect(() => {
+    if (pendingLucky && phase === 'deck' && cards.length) {
+      setPendingLucky(false);
+      lucky();
+    }
+  }, [pendingLucky, phase, cards.length]);
+
   const setBudget = (b: AppData['prefs']['budget']) => {
     const next = { ...data, prefs: { ...data.prefs, budget: b } };
     setData(next);
@@ -268,7 +329,16 @@ export function App() {
     toast('Shuffled');
   };
 
-  // Changing your mind counts as a skip, so ↺ can bring the place back.
+  /** Back to the deck after a pick, continuing with the next place. */
+  const continueDeck = () => {
+    setChosen(null);
+    setPhase('deck');
+    // Group or diet edited meanwhile: re-rank so clashing places drop out.
+    if (JSON.stringify(effectiveConstraints(data)) !== dealtFor) deal(list);
+    else setIndex((i) => i + 1);
+  };
+
+  // "Not this one": undo the pick. It counts as a skip, so ↺ can bring the place back.
   const changedMind = () => {
     if (chosen)
       update((d) => ({
@@ -277,17 +347,15 @@ export function App() {
         skips: [{ placeId: chosen.card.r.id, date: new Date().toISOString() }, ...d.skips].slice(0, MAX_SKIPS),
       }));
     play(data.prefs.sound, 'skip');
-    setChosen(null);
-    setPhase('deck');
-    // Group or diet edited meanwhile: re-rank so clashing places drop out.
-    if (JSON.stringify(effectiveConstraints(data)) !== dealtFor) deal(list);
-    else setIndex((i) => i + 1);
+    continueDeck();
   };
 
   const undoSkip = () => {
     if (index === 0) return;
+    const back = cards[index - 1];
     setIndex((i) => i - 1);
-    update((d) => ({ ...d, skips: d.skips.slice(1) }));
+    // Only forget the skip if it belongs to the card we're bringing back.
+    update((d) => ({ ...d, skips: d.skips[0]?.placeId === back?.r.id ? d.skips.slice(1) : d.skips }));
   };
 
   useEffect(() => {
@@ -365,6 +433,16 @@ export function App() {
               <Button variant="primary" size="lg" class="btn-surprise" icon="cards" onClick={surprise}>
                 Start swiping
               </Button>
+              <Button
+                variant="secondary"
+                icon="dice"
+                onClick={() => {
+                  setPendingLucky(true);
+                  surprise();
+                }}
+              >
+                I'm feeling lucky
+              </Button>
               {PROXY_URL && currentSource() === 'osm' && (
                 <button type="button" class="link small" onClick={() => setSheet('settings')}>
                   Have an access code? Unlock photos & ratings
@@ -407,11 +485,7 @@ export function App() {
             <div class="filters" aria-label="Filters">
               <PillSelect icon="pin" label="Distance" value={data.prefs.distance} onChange={setDistance} options={DISTANCES} />
               <PillSelect icon="wallet" label="Budget per person" value={data.prefs.budget} onChange={setBudget} options={BUDGETS} />
-              {phase === 'deck' && cards.length - index > 2 && (
-                <button type="button" class="pill pill-icon" onClick={shuffleDeck} aria-label={`Shuffle the ${cards.length - index} places left`} title="Shuffle">
-                  <Icon name="shuffle" size={17} />
-                </button>
-              )}
+              <PillSelect icon="clock" label="Opening hours" value={data.prefs.showClosed} onChange={setShowClosed} options={OPEN_FILTER} />
               {forLine && (
                 <button type="button" class="pill for-line" onClick={() => setSheet(people > 1 ? 'group' : 'settings')}>
                   <Icon name={people > 1 ? 'people' : 'leaf'} size={15} /> {forLine}
@@ -432,6 +506,9 @@ export function App() {
                 )}
               </div>
               <div class="swipe-buttons">
+                <button type="button" class="round round-small" aria-label={`Shuffle the ${cards.length - index} places left`} title="Shuffle" onClick={shuffleDeck} disabled={cards.length - index < 3}>
+                  <Icon name="shuffle" size={18} />
+                </button>
                 <button type="button" class="round round-undo" aria-label="Undo last skip" onClick={undoSkip} disabled={index === 0}>
                   <Icon name="undo" size={18} />
                 </button>
@@ -448,7 +525,8 @@ export function App() {
             </section>
           )}
 
-          {phase === 'deck' && !card && (
+          {phase === 'deck' && !card && loadingMore && <Deal label="Finding more places…" />}
+          {phase === 'deck' && !card && !loadingMore && (
             <section class="start">
               <h2 class="h-sm">{cards.length ? "That's everything nearby" : 'Nothing nearby fits'}</h2>
               <p class="lede">
@@ -500,11 +578,27 @@ export function App() {
                   <Icon name="map" size={22} />
                   <span>Take me there</span>
                 </a>
-                <Button variant="secondary" size="lg" onClick={changedMind}>
-                  Changed my mind
+                <Button variant="secondary" size="lg" icon="cards" onClick={continueDeck}>
+                  Keep exploring
                 </Button>
               </div>
-              <p class="remaining">Saved to your picks — rate it later with 👍 or 👎.</p>
+              <p class="chosen-links">
+                <button type="button" class="link small" onClick={changedMind}>
+                  Not this one — undo
+                </button>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  class="link small"
+                  onClick={() => {
+                    setChosen(null);
+                    setPhase('start');
+                  }}
+                >
+                  Done
+                </button>
+              </p>
+              <p class="remaining">Saved in your picks (🕐) — keep exploring and it stays there.</p>
             </section>
           )}
           </>

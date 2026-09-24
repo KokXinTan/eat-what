@@ -10,7 +10,7 @@ const MAX_GROUP = 7;
 const ART_KINDS: ArtKind[] = ['noodleSoup', 'friedNoodles', 'nasiLemak', 'friedRice', 'riceBowl', 'curry', 'roti', 'toast', 'porridge', 'pasta', 'grill', 'burger', 'sushi', 'dessert', 'greens'];
 
 export function freshData(): AppData {
-  return { version: 2, prefs: { diets: [], budget: null, distance: 'near', sound: false }, picks: [], skips: [], group: [] };
+  return { version: 2, prefs: { diets: [], budget: null, distance: 'near', sound: false, showClosed: false }, picks: [], skips: [], group: [] };
 }
 
 export function loadData(): AppData {
@@ -81,7 +81,7 @@ function parsePrefs(v: unknown): AppData['prefs'] {
   if (!isObject(v)) fail('Settings are not an object.');
   const distance = v.distance ?? 'near';
   if (distance !== 'walk' && distance !== 'near' && distance !== 'drive') fail('Settings have an unknown distance.');
-  return { diets: diets(v.diets ?? [], 'Settings'), budget: budget(v.budget ?? null, 'Settings'), distance: distance as Distance, sound: v.sound === true };
+  return { diets: diets(v.diets ?? [], 'Settings'), budget: budget(v.budget ?? null, 'Settings'), distance: distance as Distance, sound: v.sound === true, showClosed: v.showClosed === true };
 }
 
 function parsePick(v: unknown, i: number): Pick {

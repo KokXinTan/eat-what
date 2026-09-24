@@ -234,9 +234,11 @@ export function RoomScreen({ session, data, toast, onExit }: Props) {
         <button type="button" class="pill" onClick={invite}>
           <Icon name="plus" size={15} /> Invite
         </button>
-        <button type="button" class="pill" onClick={() => setShowResults((x) => !x)} aria-pressed={showResults}>
-          <Icon name="check" size={15} /> Votes
-        </button>
+        {card && (
+          <button type="button" class="pill" onClick={() => setShowResults((x) => !x)} aria-pressed={showResults}>
+            <Icon name={showResults ? 'cards' : 'check'} size={15} /> {showResults ? 'Back to swiping' : `Votes${view.matches.length ? ` · ${view.matches.length} match${view.matches.length > 1 ? 'es' : ''}` : ''}`}
+          </button>
+        )}
         <button type="button" class="icon-btn" aria-label="Leave session" onClick={exit}>
           <Icon name="x" size={18} />
         </button>
@@ -306,27 +308,37 @@ function Results({ view, deck, nameOf, done, others }: { view: Extract<RoomView,
     .map((c) => ({ c, yes: view.tally[c.r.id]?.yes ?? [] }))
     .filter((x) => x.yes.length > 0)
     .sort((a, b) => b.yes.length - a.yes.length);
+  const matched = rows.filter((x) => view.matches.includes(x.c.r.id));
+  const liked = rows.filter((x) => !view.matches.includes(x.c.r.id));
+  const row = ({ c, yes }: { c: Card; yes: string[] }) => (
+    <li key={c.r.id} class="pick">
+      {c.r.photos[0] ? <img class="pick-thumb" src={c.r.photos[0].url} alt="" /> : <FoodArt kind={c.r.art} size={48} />}
+      <a class="pick-main" href={c.r.mapsUrl} target="_blank" rel="noopener noreferrer">
+        <strong>{c.r.name}</strong>
+        <span class="muted small">{yes.map(nameOf).join(', ')}</span>
+      </a>
+      <span class={`tally ${yes.length === approved ? 'is-all' : ''}`}>
+        {yes.length}/{approved}
+      </span>
+    </li>
+  );
   return (
     <section class="results">
-      <h2 class="h-sm">{done ? (others ? 'You’re done — here’s the table so far' : 'Invite someone to swipe with you') : 'Votes so far'}</h2>
-      {rows.length === 0 ? (
-        <p class="lede">No right-swipes yet. {others ? 'Hang tight while the others swipe.' : 'Tap Invite to share the link.'}</p>
-      ) : (
-        <ul class="pick-list">
-          {rows.map(({ c, yes }) => (
-            <li key={c.r.id} class="pick">
-              {c.r.photos[0] ? <img class="pick-thumb" src={c.r.photos[0].url} alt="" /> : <FoodArt kind={c.r.art} size={48} />}
-              <a class="pick-main" href={c.r.mapsUrl} target="_blank" rel="noopener noreferrer">
-                <strong>{c.r.name}</strong>
-                <span class="muted small">{yes.map(nameOf).join(', ')}</span>
-              </a>
-              <span class={`tally ${yes.length === approved ? 'is-all' : ''}`}>
-                {yes.length}/{approved}
-              </span>
-            </li>
-          ))}
-        </ul>
+      <h2 class="h-sm">{done ? (others ? "You've seen them all" : 'Invite someone to swipe with you') : 'Votes so far'}</h2>
+      {done && others > 0 && <p class="muted small">Others may still be swiping — this updates live.</p>}
+      {matched.length > 0 && (
+        <>
+          <h3 class="section-title">🎉 Everyone likes</h3>
+          <ul class="pick-list">{matched.map(row)}</ul>
+        </>
       )}
+      {liked.length > 0 && (
+        <>
+          <h3 class="section-title">{matched.length ? 'Also liked' : 'Liked so far'}</h3>
+          <ul class="pick-list">{liked.map(row)}</ul>
+        </>
+      )}
+      {rows.length === 0 && <p class="lede">No right-swipes yet. {others ? 'Hang tight while the others swipe.' : 'Tap Invite to share the link.'}</p>}
     </section>
   );
 }

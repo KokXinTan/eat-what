@@ -147,6 +147,14 @@ describe('group', () => {
 });
 
 describe('opening hours in ranking', () => {
+  it('hides closed places unless "Any time" is chosen, then shows them after open ones', () => {
+    const list = [r({ id: 'closed', name: 'Closed', openNow: false, opensAt: 'opens 11 am', rating: 4.8, ratingCount: 3000 }), r({ id: 'open', name: 'Open', openNow: true })];
+    expect(ids(list, data())).toEqual(['open']);
+    const deck = buildDeck(list, data({}, { showClosed: true }), 's', NOW);
+    expect(deck.cards.map((c) => c.r.id)).toEqual(['open', 'closed']);
+    expect(deck.cards[1].headsUp[0]).toBe('Closed now — opens 11 am');
+  });
+
   it('pushes a place that closes within 45 minutes down and warns', () => {
     const list = [
       r({ id: 'closing', name: 'Closing', openNow: true, closesInMin: 20, hoursToday: 'until 9:30 pm', rating: 4.7, ratingCount: 2000 }),
@@ -156,6 +164,17 @@ describe('opening hours in ranking', () => {
       const deck = buildDeck(list, data(), seed, NOW);
       expect(deck.cards[0].r.id).toBe('open');
       expect(deck.cards[1].headsUp[0]).toMatch(/Closes soon \(until 9:30 pm\)/);
+    }
+  });
+});
+
+describe('hidden gems', () => {
+  it('lifts a well-rated, little-known place and says why', () => {
+    const list = [r({ id: 'gem', name: 'Gem', rating: 4.7, ratingCount: 60 }), r({ id: 'chain', name: 'Chain', rating: 4.1, ratingCount: 5000 })];
+    for (const seed of ['1', '2', '3']) {
+      const deck = buildDeck(list, data(), seed, NOW);
+      expect(deck.cards[0].r.id).toBe('gem');
+      expect(deck.cards[0].reasons.join(' ')).toMatch(/local favourite/);
     }
   });
 });

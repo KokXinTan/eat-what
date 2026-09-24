@@ -59,6 +59,8 @@ export interface Restaurant {
   hoursToday?: string;
   /** Minutes until it closes, when open now. */
   closesInMin?: number;
+  /** When it next opens, if closed now, e.g. "opens 11 am" or "opens Tue 5 pm". */
+  opensAt?: string;
   /** Google's price range per person, e.g. "RM 20–40". */
   priceText?: string;
   /** A short review excerpt that usually names dishes (Google mode only). */
@@ -102,6 +104,8 @@ export interface Prefs {
   budget: Budget;
   distance: Distance;
   sound: boolean;
+  /** Include places that are closed right now (for exploring). */
+  showClosed: boolean;
 }
 
 export interface AppData {

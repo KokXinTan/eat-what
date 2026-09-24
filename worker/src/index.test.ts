@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Room } from './room';
-import worker, { allowedOrigin, checkPhotoPass, googleSearchBody, makePhotoPass, parsePhoto, parseSearch, validCode, type Env } from './index';
+import worker, { allowedOrigin, checkPhotoPass, googleSearch, makePhotoPass, MAX_PAGE, parsePhoto, parseSearch, validCode, type Env } from './index';
 
 const SITE = 'https://kokxintan.github.io';
 
@@ -45,9 +45,7 @@ function env(): Env {
 
 describe('input validation', () => {
   it('accepts a normal search and rejects junk', () => {
-    expect(parseSearch({ lat: 3.1, lng: 101.6, radius: 2000 })).toEqual({ lat: 3.1, lng: 101.6, radius: 2000, query: null, rank: 'POPULARITY' });
-    expect(parseSearch({ lat: 3.1, lng: 101.6, radius: 2000, rank: 'DISTANCE' })).toMatchObject({ rank: 'DISTANCE' });
-    expect(parseSearch({ lat: 3.1, lng: 101.6, radius: 2000, rank: 'EVIL' })).toMatchObject({ rank: 'POPULARITY' });
+    expect(parseSearch({ lat: 3.1, lng: 101.6, radius: 2000 })).toEqual({ lat: 3.1, lng: 101.6, radius: 2000, query: null, page: 0 });
     expect(parseSearch({ lat: 3.1, lng: 101.6, radius: 2000, query: ' halal food ' })).toMatchObject({ query: 'halal food' });
     expect(parseSearch({ lat: 91, lng: 0, radius: 2000 })).toBe('Bad lat.');
     expect(parseSearch({ lat: 3, lng: 101, radius: 50_000 })).toBe('Bad radius.');
@@ -56,8 +54,12 @@ describe('input validation', () => {
   });
 
   it('builds nearby vs text searches', () => {
-    expect(googleSearchBody({ lat: 1, lng: 2, radius: 800, query: null, rank: 'DISTANCE' })).toMatchObject({ url: expect.stringMatching(/searchNearby$/), body: { rankPreference: 'DISTANCE' } });
-    expect(googleSearchBody({ lat: 1, lng: 2, radius: 800, query: 'vegan food', rank: 'POPULARITY' }).url).toMatch(/searchText$/);
+    const at = { lat: 1, lng: 2, radius: 800, query: null };
+    expect(googleSearch({ ...at, page: 0 }).body).toMatchObject({ rankPreference: 'POPULARITY' });
+    expect(googleSearch({ ...at, page: 1 }).body).toMatchObject({ rankPreference: 'DISTANCE' });
+    expect(googleSearch({ ...at, page: 2 })).toMatchObject({ url: expect.stringMatching(/searchText$/), body: { textQuery: 'kopitiam' } });
+    expect(googleSearch({ ...at, query: 'halal food', page: 3 }).body).toMatchObject({ textQuery: 'halal food hawker stall' });
+    expect(parseSearch({ lat: 1, lng: 2, radius: 800, page: MAX_PAGE + 1 })).toBe('Bad page.');
   });
 
   it('only allows well-formed photo names (no path tricks)', () => {

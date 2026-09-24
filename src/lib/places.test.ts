@@ -46,7 +46,8 @@ describe('open now from Google opening periods', () => {
   });
 
   it('knows a lunch-only place is closed at night', () => {
-    expect(openStatus(daily(11, 15), MYT, THU_930PM)).toEqual({ open: false });
+    expect(openStatus(daily(11, 15), MYT, THU_930PM)).toEqual({ open: false, opensAt: 'opens Fri 11 am' });
+    expect(openStatus(daily(22, 23), MYT, THU_930PM)).toEqual({ open: false, opensAt: 'opens 10 pm' });
   });
 
   it('handles 24-hour places and missing hours', () => {
@@ -104,12 +105,13 @@ describe('Google Places (via the Worker) mapping', () => {
   });
 });
 
-describe('daily Google ordering', () => {
-  it('alternates popular and nearest by day', async () => {
-    const { dailyRank } = await import('./places');
-    const a = dailyRank(new Date('2026-09-24T12:00:00'));
-    const b = dailyRank(new Date('2026-09-25T12:00:00'));
-    expect(new Set([a, b])).toEqual(new Set(['POPULARITY', 'DISTANCE']));
-    expect(dailyRank(new Date('2026-09-24T01:00:00'))).toBe(dailyRank(new Date('2026-09-24T23:00:00')));
+
+describe('illustration matching', () => {
+  it('matches whole words only for short food names', async () => {
+    const { artFor } = await import('./art-map');
+    expect(artFor('Restoran Little Bentong Street Hainanese Cafe')).not.toBe('sushi');
+    expect(artFor('Bento House')).toBe('sushi');
+    expect(artFor('Pho Viet')).toBe('noodleSoup');
+    expect(artFor('Phoenix Kopitiam')).toBe('toast');
   });
 });

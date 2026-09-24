@@ -29,6 +29,7 @@ export interface Env {
 }
 
 const PLACES = 'https://places.googleapis.com/v1';
+/** Google's per-request maximum. */
 const MAX_RESULTS = 20;
 const MIN_RADIUS_M = 100;
 const MAX_RADIUS_M = 10_000;
@@ -83,8 +84,8 @@ export interface SearchInput {
   lng: number;
   radius: number;
   query: string | null;
-  /** POPULARITY (default) or DISTANCE — the app alternates by day for a fresher pool. */
-  rank: 'POPULARITY' | 'DISTANCE';
+  /** 0 = most popular, 1 = closest, 2+ = niche searches (see NICHE). */
+  page: number;
 }
 
 /** Validates the JSON body of /search. Returns an error message or the clean input. */
@@ -102,19 +103,28 @@ export function parseSearch(body: unknown): SearchInput | string {
     if (typeof b.query !== 'string' || !b.query.trim() || b.query.length > MAX_QUERY_CHARS) return 'Bad query.';
     query = b.query.trim();
   }
-  const rank = b.rank === 'DISTANCE' ? 'DISTANCE' : 'POPULARITY';
-  return { lat, lng, radius: Math.round(radius), query, rank };
+  const page = Number(b.page ?? 0);
+  if (!Number.isInteger(page) || page < 0 || page > MAX_PAGE) return 'Bad page.';
+  return { lat, lng, radius: Math.round(radius), query, page };
 }
 
-/** Google request body for a nearby (or diet-keyword) restaurant search. */
-export function googleSearchBody(s: SearchInput) {
+/** Searches that dig up smaller local places Google's popularity ranking tends to bury. */
+export const NICHE = ['kopitiam', 'hawker stall', 'noodle shop', 'nasi kandar', 'dim sum', 'street food', 'local cafe', 'mamak', 'claypot', 'dessert'];
+export const MAX_PAGE = 1 + NICHE.length;
+
+/**
+ * The Google request for one "page" of places. The app loads a page at a time and asks for the
+ * next only when the deck is nearly empty: popular → closest → niche searches.
+ */
+export function googleSearch(s: SearchInput) {
   const circle = { center: { latitude: s.lat, longitude: s.lng }, radius: s.radius };
-  return s.query
-    ? { url: `${PLACES}/places:searchText`, body: { textQuery: s.query, maxResultCount: MAX_RESULTS, locationBias: { circle } } }
-    : {
-        url: `${PLACES}/places:searchNearby`,
-        body: { includedTypes: ['restaurant', 'food_court'], maxResultCount: MAX_RESULTS, locationRestriction: { circle }, rankPreference: s.rank },
-      };
+  const text = (q: string) => ({ url: `${PLACES}/places:searchText`, body: { textQuery: q, maxResultCount: MAX_RESULTS, locationBias: { circle } } });
+  if (s.page >= 2) return text(`${s.query ? `${s.query} ` : ''}${NICHE[(s.page - 2) % NICHE.length]}`);
+  if (s.query) return text(s.page === 1 ? `${s.query} near me` : s.query);
+  return {
+    url: `${PLACES}/places:searchNearby`,
+    body: { includedTypes: ['restaurant', 'food_court'], maxResultCount: MAX_RESULTS, locationRestriction: { circle }, rankPreference: s.page === 1 ? 'DISTANCE' : 'POPULARITY' },
+  };
 }
 
 const MAX_REVIEWS = 3;
@@ -313,19 +323,18 @@ export default {
       }
       const input = parseSearch(body);
       if (typeof input === 'string') return json({ error: input }, 400, origin);
-      const g = googleSearchBody(input);
+      const g = googleSearch(input);
       const res = await fetch(g.url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': env.GOOGLE_MAPS_API_KEY, 'X-Goog-FieldMask': FIELD_MASK },
         body: JSON.stringify(g.body),
       });
-      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!res.ok) {
-        // Pass Google's error message through (never the key), so problems are debuggable.
-        return json({ error: (data as { error?: { message?: string } }).error?.message ?? 'Google search failed.' }, 502, origin);
-      }
+      const data = (await res.json().catch(() => ({}))) as { places?: Json[]; error?: { message?: string } };
+      // Pass Google's error message through (never the key), so problems are debuggable.
+      if (!res.ok) return json({ error: data.error?.message ?? 'Google search failed.' }, 502, origin);
+      const places = (data.places ?? []).map(slimPlace);
       const photoPass = await makePhotoPass(env.GOOGLE_MAPS_API_KEY, Math.floor(Date.now() / 1000));
-      return json({ places: ((data.places as Json[]) ?? []).map(slimPlace), photoPass }, 200, origin);
+      return json({ places, photoPass }, 200, origin);
     }
 
     if (url.pathname === '/photo' && req.method === 'GET') {
