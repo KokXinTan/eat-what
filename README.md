@@ -6,8 +6,9 @@ Can't decide where to eat? Tap **Surprise me** and swipe through what's good nea
 
 - **One screen, minimal typing.** Distance (walk / nearby / drive) and budget ($–$$$) are
   one-tap chips. Everything else is optional.
-- **Real restaurants near you.** Free [OpenStreetMap](https://www.openstreetmap.org) data by
-  default; Google Maps data (ratings, prices, open now, photos, review snippets) if you add a key.
+- **Real restaurants near you.** Free [OpenStreetMap](https://www.openstreetmap.org) data for
+  everyone; Google Maps data (photos, ratings, prices, open now, reviews) for people with an
+  access code, served through a private Cloudflare Worker so the key is never public.
 - **Never repeats what you just skipped**, brings back 👍 favourites, avoids 👎 ones, and
   prefers a change from your last pick.
 - **Dietary needs** (halal, no pork, no beef, vegetarian, vegan): clear clashes are hidden;
@@ -26,31 +27,41 @@ npm test           # ranking, diet, OSM parsing and backup tests
 
 Location needs `localhost` or HTTPS. If location is off, the app asks for an area name instead.
 
-## Optional: Google Maps data
+## Optional: Google Maps data (via a private Cloudflare Worker)
 
-Free OpenStreetMap works out of the box. For Google's richer data:
+Free OpenStreetMap works out of the box. For Google photos, ratings, prices and opening hours,
+the app talks to a small Cloudflare Worker in `worker/` that holds the Google key — **the key
+never reaches the website or the repo**. Visitors need an **access code** (one per person, so you
+can revoke anyone); without one they still get the free OpenStreetMap version.
 
-1. In Google Cloud Console, enable **Maps JavaScript API** and **Places API (New)** (needs billing).
-2. Create an API key and restrict it:
-   - Application restriction → Websites: `http://localhost:5173/*`, `https://<user>.github.io/*`
-   - API restriction → only the two APIs above
-   - Quotas → set daily caps (e.g. ~30 searches and ~30 photos per day) — your real protection
-3. Copy `.env.example` to `.env.local` and set `VITE_GOOGLE_MAPS_API_KEY=...`, then restart `npm run dev`.
+One-time setup (free Cloudflare plan is plenty):
 
-The key is visible in the built site — that's normal for browser Maps keys. Google notes the
-website restriction can be bypassed, so the **daily quota caps are your real protection**.
-Requesting ratings, prices and reviews bills searches at the Enterprise tier (1,000 free/month
-at the time of writing), and photos have their own 1,000/month allowance — caps of ~30
-searches/day and ~30 photos/day keep a shared app inside the free tier. Google results are kept
-in memory only (Google's terms restrict storing Places content); photos load only for the card
-on screen and the one behind it.
+1. Google Cloud: enable **Places API (New)**; create a key with **API restriction → Places API
+   (New)** only and **Application restriction → None** (calls come from Cloudflare, not browsers).
+   Set daily quota caps (e.g. ~30 searches, ~30 photos) as a final backstop.
+2. `npx wrangler login` (opens the browser once).
+3. `npx wrangler secret put GOOGLE_MAPS_API_KEY --config worker/wrangler.toml` — paste the key.
+4. `npm run worker:codes` — paste comma-separated codes, e.g. `me-x7k2,aina-p9q3`.
+5. `npm run worker:deploy` — note the `https://eat-what-places.<you>.workers.dev` URL.
+6. Local dev: put that URL in `.env.local` as `VITE_PLACES_PROXY_URL=...`.
+   GitHub: **Settings → Secrets and variables → Actions → Variables** → `PLACES_PROXY_URL`.
+
+**Manage access:** run `npm run worker:codes` again with the new list (e.g. drop `aina-p9q3` to
+revoke Aina), or edit the `ACCESS_CODES` secret in the Cloudflare dashboard. No redeploy needed.
+
+**Protection layers:** the Worker only serves your site's origins, validates inputs, needs a
+valid code for searches, issues 1-hour signed passes for photos, and rate-limits each visitor
+(10 searches + 90 photos per minute). Google's daily quota caps stay as the final limit.
+Searches that request ratings, prices and reviews bill at Google's Enterprise tier (1,000 free
+a month at the time of writing); photos have their own 1,000 free a month. Google results are
+kept in memory only (Google's terms restrict storing Places content).
 
 ## Deploy to GitHub Pages
 
 1. Push this folder to a **public** GitHub repo (e.g. `eat-what`) on the `main` branch.
 2. Repo **Settings → Pages → Source: GitHub Actions**.
-3. (Optional) **Settings → Secrets and variables → Actions → New secret**
-   `VITE_GOOGLE_MAPS_API_KEY`.
+3. (Optional) **Settings → Secrets and variables → Actions → Variables** → `PLACES_PROXY_URL`
+   (your Worker URL). It's public — the key stays in Cloudflare.
 4. Push — `.github/workflows/deploy.yml` tests, builds with the repo path as the base, and
    publishes to `https://<user>.github.io/<repo>/`.
 
@@ -70,10 +81,11 @@ src/
     Sheets.tsx          Group, History (👍/👎) and Settings (diet, backup)
     FoodArt.tsx         original gouache-style SVG food illustrations
   lib/
-    places.ts           OpenStreetMap + optional Google Places, 30-min cache
+    places.ts           OpenStreetMap + Google Places via the Worker, caching
     rank.ts             deterministic scoring → deck + "why this, today"
     diet.ts             dietary rules (conflict / unverified / ok)
     storage.ts          localStorage + validated backup import
+worker/src/index.ts     Cloudflare Worker: holds the key, access codes, rate limits
 ```
 
 ## Limits

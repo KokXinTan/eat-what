@@ -1,14 +1,40 @@
-/// <reference types="google.maps" />
 import { artFor, foodFor } from './art-map';
 import type { Distance, PriceLevel, Restaurant } from './types';
 
 // Two interchangeable restaurant sources:
-//  • OpenStreetMap (default): free, no key. No ratings or prices.
-//  • Google Places: used only when VITE_GOOGLE_MAPS_API_KEY is set at build time.
+//  • OpenStreetMap: free, no key, used by anyone. No ratings, prices or photos.
+//  • Google Places, via our Cloudflare Worker (worker/), for people with an access code.
+//    The Google key lives only in the Worker; this site never sees it.
 // Every result links to Google Maps for reviews and directions.
 
-export const GOOGLE_KEY: string = import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '';
-export const SOURCE: 'google' | 'osm' = GOOGLE_KEY ? 'google' : 'osm';
+/** Worker URL, set at build time. Empty = OpenStreetMap only. */
+export const PROXY_URL: string = (import.meta.env.VITE_PLACES_PROXY_URL ?? '').replace(/\/$/, '');
+const CODE_KEY = 'eat-what:access-code';
+
+export function getAccessCode(): string {
+  try {
+    return localStorage.getItem(CODE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function setAccessCode(code: string) {
+  try {
+    if (code) localStorage.setItem(CODE_KEY, code.trim());
+    else localStorage.removeItem(CODE_KEY);
+  } catch {
+    /* private mode: code lasts for this page only */
+  }
+}
+
+/** Google when a Worker is configured and this browser has an access code. */
+export function currentSource(): 'google' | 'osm' {
+  return PROXY_URL && getAccessCode() ? 'google' : 'osm';
+}
+
+/** Thrown when the Worker rejects the access code. */
+export class AccessCodeError extends Error {}
 
 export const RADIUS_M: Record<Distance, number> = { walk: 800, near: 2000, drive: 6000 };
 
@@ -139,75 +165,62 @@ export async function geocode(place: string): Promise<LatLng | null> {
   return hit ? { lat: Number(hit.lat), lng: Number(hit.lon) } : null;
 }
 
-// ---------- Google Places (optional) ----------
+// ---------- Google Places (via the Worker) ----------
 
-let placesLib: Promise<google.maps.PlacesLibrary> | null = null;
-
-function loadPlaces(): Promise<google.maps.PlacesLibrary> {
-  placesLib ??= new Promise<void>((resolve, reject) => {
-    const cb = '__eatWhatMapsReady';
-    (window as unknown as Record<string, () => void>)[cb] = () => resolve();
-    const s = document.createElement('script');
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GOOGLE_KEY)}&v=weekly&loading=async&callback=${cb}`;
-    s.async = true;
-    s.onerror = () => reject(new Error('Could not load Google Maps.'));
-    document.head.appendChild(s);
-  }).then(() => google.maps.importLibrary('places') as Promise<google.maps.PlacesLibrary>);
-  return placesLib;
-}
-
-const PRICE: Record<string, PriceLevel> = { INEXPENSIVE: 1, MODERATE: 2, EXPENSIVE: 3, VERY_EXPENSIVE: 4 };
-const BASE_FIELDS = [
-  'id',
-  'displayName',
-  'types',
-  'primaryTypeDisplayName',
-  'rating',
-  'userRatingCount',
-  'priceLevel',
-  'location',
-  'shortFormattedAddress',
-  'googleMapsURI',
-  'regularOpeningHours',
-  'utcOffsetMinutes',
-  'businessStatus',
-  'servesVegetarianFood',
-  'servesBreakfast',
-  'servesBrunch',
-  'servesLunch',
-  'servesDinner',
-  'servesDessert',
-  'servesCoffee',
-  'editorialSummary',
-  'photos',
-  'reviews',
-];
-// Newer fields; any this Maps version rejects are dropped automatically (see searchGoogle).
-const EXTRA_FIELDS = [
-  'addressComponents',
-  'priceRange',
-  'hasDineIn',
-  'hasTakeout',
-  'hasDelivery',
-  'isGoodForGroups',
-  'isGoodForChildren',
-  'hasOutdoorSeating',
-  'isReservable',
-  'generativeSummary',
-  'reviewSummary',
-];
-let fields = [...BASE_FIELDS, ...EXTRA_FIELDS];
-const MAX_FIELD_RETRIES = EXTRA_FIELDS.length;
-
+const PRICE: Record<string, PriceLevel> = {
+  PRICE_LEVEL_INEXPENSIVE: 1,
+  PRICE_LEVEL_MODERATE: 2,
+  PRICE_LEVEL_EXPENSIVE: 3,
+  PRICE_LEVEL_VERY_EXPENSIVE: 4,
+};
 const PHOTO_MAX_PX = 900;
 const MAX_PHOTOS = 5;
 const REVIEW_MAX_CHARS = 150;
 const AREA_TYPES = ['neighborhood', 'sublocality_level_1', 'sublocality', 'locality'];
+const SEARCH_TIMEOUT_MS = 15_000;
+
+/** The subset of a Places API (New) REST place that we use. */
+export interface GPlace {
+  id: string;
+  displayName?: { text: string };
+  types?: string[];
+  primaryTypeDisplayName?: { text: string };
+  rating?: number;
+  userRatingCount?: number;
+  priceLevel?: string;
+  priceRange?: { startPrice?: { units?: string; currencyCode?: string }; endPrice?: { units?: string } };
+  location?: { latitude: number; longitude: number };
+  shortFormattedAddress?: string;
+  addressComponents?: { longText?: string; shortText?: string; types: string[] }[];
+  googleMapsUri?: string;
+  regularOpeningHours?: { periods?: Period[]; weekdayDescriptions?: string[] };
+  utcOffsetMinutes?: number;
+  businessStatus?: string;
+  servesVegetarianFood?: boolean;
+  servesBreakfast?: boolean;
+  servesBrunch?: boolean;
+  servesLunch?: boolean;
+  servesDinner?: boolean;
+  servesDessert?: boolean;
+  servesCoffee?: boolean;
+  dineIn?: boolean;
+  takeout?: boolean;
+  delivery?: boolean;
+  goodForGroups?: boolean;
+  goodForChildren?: boolean;
+  outdoorSeating?: boolean;
+  reservable?: boolean;
+  editorialSummary?: { text?: string };
+  generativeSummary?: { overview?: { text?: string } };
+  reviewSummary?: { text?: { text?: string } };
+  photos?: { name: string; authorAttributions?: { displayName?: string; uri?: string }[] }[];
+  reviews?: { text?: { text?: string }; authorAttribution?: { displayName?: string } }[];
+}
 
 /** First review that is short enough to read at a glance, trimmed to a sentence. */
-function snippet(p: google.maps.places.Place): Restaurant['review'] {
+function snippet(p: GPlace): Restaurant['review'] {
   for (const rv of p.reviews ?? []) {
-    const text = (rv.text ?? '').replace(/\s+/g, ' ').trim();
+    const text = (rv.text?.text ?? '').replace(/\s+/g, ' ').trim();
     if (text.length < 25) continue;
     const cut = text.length > REVIEW_MAX_CHARS ? `${text.slice(0, REVIEW_MAX_CHARS).replace(/[,.;!?]?\s+\S*$/, '')}…` : text;
     return { text: cut, author: rv.authorAttribution?.displayName ?? 'A Google reviewer' };
@@ -215,41 +228,77 @@ function snippet(p: google.maps.places.Place): Restaurant['review'] {
   return undefined;
 }
 
-/** Text from fields that may be a string or { text } depending on API version. */
-function textOf(v: unknown): string {
-  if (typeof v === 'string') return v;
-  if (v && typeof v === 'object') {
-    const o = v as Record<string, unknown>;
-    return textOf(o.text ?? o.overview ?? '');
-  }
-  return '';
-}
-
-function priceText(json: Record<string, unknown>): string | undefined {
-  const range = json.priceRange as { startPrice?: { units?: string | number; currencyCode?: string }; endPrice?: { units?: string | number } } | undefined;
-  const from = range?.startPrice?.units;
+function priceText(p: GPlace): string | undefined {
+  const from = p.priceRange?.startPrice?.units;
   if (from === undefined) return undefined;
-  const cur = range?.startPrice?.currencyCode === 'MYR' || !range?.startPrice?.currencyCode ? 'RM' : range.startPrice.currencyCode;
-  const to = range?.endPrice?.units;
+  const code = p.priceRange?.startPrice?.currencyCode;
+  const cur = !code || code === 'MYR' ? 'RM' : code;
+  const to = p.priceRange?.endPrice?.units;
   return to !== undefined ? `${cur} ${from}–${to}` : `${cur} ${from}+`;
 }
 
-function areaOf(p: google.maps.places.Place): string {
-  const comps = p.addressComponents ?? [];
+function areaOf(p: GPlace): string {
   for (const t of AREA_TYPES) {
-    const hit = comps.find((c) => c.types.includes(t));
+    const hit = p.addressComponents?.find((c) => c.types.includes(t));
     if (hit?.longText) return hit.shortText ?? hit.longText;
   }
   return '';
 }
 
-/** "Wednesday: 11:00 AM – 10:00 PM" → "11:00 AM – 10:00 PM" for today (Google lists Monday first). */
-function hoursToday(p: google.maps.places.Place, now = new Date()): string | undefined {
-  const days = p.regularOpeningHours?.weekdayDescriptions;
-  if (!days?.length) return undefined;
-  const line = days[(now.getDay() + 6) % 7] ?? '';
-  const hours = line.replace(/^[^:]+:\s*/, '').trim();
-  return hours || undefined;
+/** Turns one Google place (REST shape) into a card-ready Restaurant. */
+export function fromGoogle(p: GPlace, center: LatLng, photoUrl: (name: string) => string, now = new Date()): Restaurant | null {
+  const name = p.displayName?.text;
+  if (!name || !p.location || p.businessStatus === 'CLOSED_PERMANENTLY') return null;
+  const at = { lat: p.location.latitude, lng: p.location.longitude };
+  const types = p.types ?? [];
+  const typeLabel = p.primaryTypeDisplayName?.text ?? '';
+  const status = openStatus(p.regularOpeningHours?.periods, p.utcOffsetMinutes, now);
+  const summary = p.editorialSummary?.text || p.generativeSummary?.overview?.text || p.reviewSummary?.text?.text || '';
+  return {
+    id: `g:${p.id}`,
+    name,
+    food: foodFor(types, typeLabel),
+    typeLabel,
+    area: areaOf(p),
+    types,
+    rating: p.rating ?? null,
+    ratingCount: p.userRatingCount ?? 0,
+    price: p.priceLevel ? PRICE[p.priceLevel] ?? null : null,
+    priceText: priceText(p),
+    distanceM: distanceM(center, at),
+    openNow: status.open,
+    closesInMin: status.minsLeft,
+    hoursToday: status.until,
+    address: p.shortFormattedAddress ?? '',
+    mapsUrl: p.googleMapsUri ?? mapsSearchUrl(name, at, p.id),
+    vegetarian: p.servesVegetarianFood ?? null,
+    summary,
+    art: artFor(`${name} ${types.join(' ')} ${typeLabel}`),
+    photos: (p.photos ?? []).slice(0, MAX_PHOTOS).map((ph) => ({
+      url: photoUrl(ph.name),
+      credit: ph.authorAttributions?.[0]?.displayName ?? 'Google Maps user',
+      creditUrl: ph.authorAttributions?.[0]?.uri,
+    })),
+    serves: [
+      p.servesBreakfast && 'Breakfast',
+      p.servesBrunch && 'Brunch',
+      p.servesLunch && 'Lunch',
+      p.servesDinner && 'Dinner',
+      p.servesDessert && 'Dessert',
+      p.servesCoffee && 'Coffee',
+      p.servesVegetarianFood && 'Vegetarian options',
+    ].filter((x): x is string => Boolean(x)),
+    features: [
+      p.dineIn && 'Dine-in',
+      p.takeout && 'Takeaway',
+      p.delivery && 'Delivery',
+      p.goodForGroups && 'Good for groups',
+      p.outdoorSeating && 'Outdoor seating',
+      p.goodForChildren && 'Kid-friendly',
+      p.reservable && 'Takes bookings',
+    ].filter((x): x is string => Boolean(x)),
+    review: snippet(p),
+  };
 }
 
 export interface Period {
@@ -283,82 +332,29 @@ export function openStatus(periods: Period[] | undefined, utcOffsetMinutes: numb
   return { open: false };
 }
 
-async function runSearch(Place: typeof google.maps.places.Place, center: LatLng, radius: number, textQuery: string | null) {
-  // Try the rich field list; if Google rejects a field in this version, drop it and retry.
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return textQuery
-        ? await Place.searchByText({ textQuery, fields, locationBias: { center, radius }, maxResultCount: 20 })
-        : await Place.searchNearby({ fields, locationRestriction: { center, radius }, includedTypes: ['restaurant', 'food_court'], maxResultCount: 20 });
-    } catch (err) {
-      const msg = String((err as Error)?.message ?? err);
-      const bad = EXTRA_FIELDS.find((f) => fields.includes(f) && msg.includes(f));
-      if (!bad || attempt >= MAX_FIELD_RETRIES) throw new Error('Google Maps search failed. Check the API key and that Places API (New) is enabled.');
-      fields = fields.filter((f) => f !== bad);
-    }
-  }
-}
-
 async function searchGoogle(center: LatLng, radius: number, textQuery: string | null): Promise<Restaurant[]> {
-  const { Place } = await loadPlaces();
-  const { places } = await runSearch(Place, center, radius, textQuery);
-  const usable = places.filter((p) => p.location && p.displayName && p.businessStatus !== 'CLOSED_PERMANENTLY');
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), SEARCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${PROXY_URL}/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Access-Code': getAccessCode() },
+      body: JSON.stringify({ lat: center.lat, lng: center.lng, radius, query: textQuery }),
+      signal: ctl.signal,
+    });
+  } catch {
+    throw new Error('Could not reach Google Maps. Check your connection.');
+  } finally {
+    clearTimeout(timer);
+  }
+  const data = (await res.json().catch(() => ({}))) as { places?: GPlace[]; photoPass?: string; error?: string };
+  if (res.status === 401) throw new AccessCodeError(data.error ?? 'Access code not recognised.');
+  if (!res.ok) throw new Error(res.status === 429 ? 'Lots of searches just now — wait a minute and try again.' : 'Google Maps search failed — try again.');
+  const pass = encodeURIComponent(data.photoPass ?? '');
+  const photoUrl = (name: string) => `${PROXY_URL}/photo?name=${encodeURIComponent(name)}&w=${PHOTO_MAX_PX}&pass=${pass}`;
   const now = new Date();
-  return usable.map((p): Restaurant => {
-    const status = openStatus(p.regularOpeningHours?.periods as Period[] | undefined, p.utcOffsetMinutes ?? undefined, now);
-    const at = { lat: p.location!.lat(), lng: p.location!.lng() };
-    const name = p.displayName!;
-    const types = p.types ?? [];
-    const typeLabel = p.primaryTypeDisplayName ?? '';
-    const json = p.toJSON() as Record<string, unknown>;
-    const summary = p.editorialSummary || textOf(json.generativeSummary) || textOf(json.reviewSummary);
-    return {
-      id: `g:${p.id}`,
-      name,
-      food: foodFor(types, typeLabel),
-      typeLabel,
-      area: areaOf(p),
-      types,
-      rating: p.rating ?? null,
-      ratingCount: p.userRatingCount ?? 0,
-      price: p.priceLevel ? PRICE[p.priceLevel] ?? null : null,
-      priceText: priceText(json),
-      distanceM: distanceM(center, at),
-      openNow: status.open,
-      closesInMin: status.minsLeft,
-      hoursToday: status.until ?? hoursToday(p),
-      address: p.shortFormattedAddress ?? '',
-      mapsUrl: p.googleMapsURI ?? mapsSearchUrl(name, at, p.id),
-      vegetarian: p.servesVegetarianFood ?? null,
-      summary,
-      art: artFor(`${name} ${types.join(' ')} ${typeLabel}`),
-      // getURI only builds links; each (billed) image loads only when shown.
-      photos: (p.photos ?? []).slice(0, MAX_PHOTOS).map((ph) => ({
-        url: ph.getURI({ maxWidth: PHOTO_MAX_PX }),
-        credit: ph.authorAttributions[0]?.displayName ?? 'Google Maps user',
-        creditUrl: ph.authorAttributions[0]?.uri ?? undefined,
-      })),
-      serves: [
-        p.servesBreakfast && 'Breakfast',
-        p.servesBrunch && 'Brunch',
-        p.servesLunch && 'Lunch',
-        p.servesDinner && 'Dinner',
-        p.servesDessert && 'Dessert',
-        p.servesCoffee && 'Coffee',
-        p.servesVegetarianFood && 'Vegetarian options',
-      ].filter((x): x is string => Boolean(x)),
-      features: [
-        json.hasDineIn && 'Dine-in',
-        json.hasTakeout && 'Takeaway',
-        json.hasDelivery && 'Delivery',
-        json.isGoodForGroups && 'Good for groups',
-        json.hasOutdoorSeating && 'Outdoor seating',
-        json.isGoodForChildren && 'Kid-friendly',
-        json.isReservable && 'Takes bookings',
-      ].filter((x): x is string => Boolean(x)),
-      review: snippet(p),
-    };
-  });
+  return (data.places ?? []).map((p) => fromGoogle(p, center, photoUrl, now)).filter((r): r is Restaurant => r !== null);
 }
 
 // ---------- shared entry point with a short cache ----------
@@ -371,7 +367,7 @@ const CACHE_PREFIX = 'eat-what:places:';
 const memory = new Map<string, { at: number; list: Restaurant[] }>();
 
 function readCache(key: string): Restaurant[] | null {
-  if (SOURCE === 'google') {
+  if (currentSource() === 'google') {
     const hit = memory.get(key);
     return hit && Date.now() - hit.at < CACHE_MS ? hit.list : null;
   }
@@ -384,7 +380,7 @@ function readCache(key: string): Restaurant[] | null {
 }
 
 function writeCache(key: string, list: Restaurant[]) {
-  if (SOURCE === 'google') {
+  if (currentSource() === 'google') {
     memory.set(key, { at: Date.now(), list });
     return;
   }
@@ -399,10 +395,11 @@ function writeCache(key: string, list: Restaurant[]) {
 export async function findRestaurants(center: LatLng, distance: Distance, textQuery: string | null): Promise<Restaurant[]> {
   const radius = RADIUS_M[distance];
   // OSM ignores the diet words, so they only split the cache for Google.
-  const key = `${SOURCE}:${center.lat.toFixed(3)},${center.lng.toFixed(3)}:${radius}:${SOURCE === 'google' ? textQuery ?? '' : ''}`;
+  const source = currentSource();
+  const key = `${source}:${center.lat.toFixed(3)},${center.lng.toFixed(3)}:${radius}:${source === 'google' ? textQuery ?? '' : ''}`;
   const cached = readCache(key);
   if (cached) return cached;
-  const list = (SOURCE === 'google' ? await searchGoogle(center, radius, textQuery) : await searchOsm(center, radius)).filter(
+  const list = (source === 'google' ? await searchGoogle(center, radius, textQuery) : await searchOsm(center, radius)).filter(
     (r) => r.distanceM <= radius * 1.2,
   );
   writeCache(key, list);

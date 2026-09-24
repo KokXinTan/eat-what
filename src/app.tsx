@@ -4,7 +4,7 @@ import { GroupSheet, HistorySheet, SettingsSheet, type SheetProps } from './comp
 import { CardDetails, CardFace, SwipeCard, type SwipeDir } from './components/SwipeCard';
 import { Button, Icon, PillSelect, Sheet } from './components/ui';
 import { DIETS, dietQuery } from './lib/diet';
-import { findRestaurants, geocode, getLocation, SOURCE, type LatLng } from './lib/places';
+import { AccessCodeError, currentSource, findRestaurants, geocode, getLocation, PROXY_URL, setAccessCode, type LatLng } from './lib/places';
 import { buildDeck, effectiveConstraints, type Card } from './lib/rank';
 import { play } from './lib/sound';
 import { STORAGE_KEY, loadData, newId, saveData } from './lib/storage';
@@ -102,6 +102,12 @@ export function App() {
       setPhase('deck');
       if (found.length) play(d.prefs.sound, 'reveal');
     } catch (e) {
+      if (e instanceof AccessCodeError) {
+        // Code revoked or mistyped: carry on with free map data rather than failing.
+        setAccessCode('');
+        toast("That access code isn't valid — showing free map data.");
+        return search(at, d);
+      }
       setError(e instanceof Error ? e.message : 'Something went wrong finding restaurants.');
       setPhase('error');
     }
@@ -258,6 +264,11 @@ export function App() {
               <Button variant="primary" size="lg" class="btn-surprise" icon="spark" onClick={surprise}>
                 Surprise me
               </Button>
+              {PROXY_URL && currentSource() === 'osm' && (
+                <button type="button" class="link small" onClick={() => setSheet('settings')}>
+                  Have an access code? Unlock photos & ratings
+                </button>
+              )}
             </section>
           )}
 
@@ -343,7 +354,7 @@ export function App() {
                   ? `You've seen all ${cards.length}.`
                   : list.length
                     ? `I found ${list.length} places, but:`
-                    : SOURCE === 'osm'
+                    : currentSource() === 'osm'
                       ? 'The free map has no restaurants listed this close.'
                       : 'No restaurants found this close.'}
               </p>

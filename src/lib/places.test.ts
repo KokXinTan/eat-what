@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { distanceM, fromOsm, openStatus } from './places';
+import { distanceM, fromGoogle, fromOsm, openStatus } from './places';
 
 const KL = { lat: 3.1478, lng: 101.6953 };
 
@@ -57,5 +57,49 @@ describe('open now from Google opening periods', () => {
   it('handles a Saturday-night period that closes on Sunday', () => {
     const satLate = [{ open: { day: 6, hour: 18, minute: 0 }, close: { day: 0, hour: 2, minute: 30 } }];
     expect(openStatus(satLate, MYT, new Date('2026-09-26T17:00:00Z'))).toEqual({ open: true, until: 'until 2:30 am', minsLeft: 90 }); // Sun 1am MYT
+  });
+});
+
+describe('Google Places (via the Worker) mapping', () => {
+  const photo = (name: string) => `https://proxy.example/photo?name=${encodeURIComponent(name)}`;
+  const base = {
+    id: 'ChIJ1',
+    displayName: { text: 'Kafe Masakan Terengganu Asli' },
+    types: ['malaysian_restaurant', 'restaurant'],
+    primaryTypeDisplayName: { text: 'Malaysian Restaurant' },
+    rating: 4.4,
+    userRatingCount: 969,
+    priceLevel: 'PRICE_LEVEL_INEXPENSIVE',
+    priceRange: { startPrice: { units: '1', currencyCode: 'MYR' }, endPrice: { units: '20' } },
+    location: { latitude: 3.12, longitude: 101.62 },
+    addressComponents: [{ longText: 'SS 2', shortText: 'SS 2', types: ['sublocality_level_1'] }],
+    googleMapsUri: 'https://maps.google.com/?cid=1',
+    dineIn: true,
+    takeout: true,
+    servesLunch: true,
+    photos: [{ name: 'places/ChIJ1/photos/p1', authorAttributions: [{ displayName: 'Jonathan Chan', uri: 'https://maps.google.com/u/1' }] }],
+    reviews: [{ text: { text: 'Best nasi kerabu in PJ, the ayam percik is smoky and the keropok lekor is perfectly chewy.' }, authorAttribution: { displayName: 'Siti' } }],
+  };
+
+  it('uses the real name as the title and Google\'s label as the subtitle', () => {
+    const r = fromGoogle(base, KL, photo)!;
+    expect(r.name).toBe('Kafe Masakan Terengganu Asli');
+    expect(r.typeLabel).toBe('Malaysian Restaurant');
+    expect(r.area).toBe('SS 2');
+    expect(r.priceText).toBe('RM 1–20');
+    expect(r.price).toBe(1);
+    expect(r.features).toEqual(['Dine-in', 'Takeaway']);
+    expect(r.serves).toEqual(['Lunch']);
+    expect(r.review?.author).toBe('Siti');
+  });
+
+  it('routes photos through the proxy (no Google key in the page)', () => {
+    const r = fromGoogle(base, KL, photo)!;
+    expect(r.photos[0]).toEqual({ url: 'https://proxy.example/photo?name=places%2FChIJ1%2Fphotos%2Fp1', credit: 'Jonathan Chan', creditUrl: 'https://maps.google.com/u/1' });
+  });
+
+  it('skips permanently closed or incomplete places', () => {
+    expect(fromGoogle({ ...base, businessStatus: 'CLOSED_PERMANENTLY' }, KL, photo)).toBeNull();
+    expect(fromGoogle({ ...base, displayName: undefined }, KL, photo)).toBeNull();
   });
 });

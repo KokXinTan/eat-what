@@ -1,6 +1,6 @@
 import { useRef, useState } from 'preact/hooks';
 import { DIETS, DIET_IDS } from '../lib/diet';
-import { SOURCE } from '../lib/places';
+import { currentSource, getAccessCode, PROXY_URL, setAccessCode } from '../lib/places';
 import { priceLabel } from '../lib/rank';
 import { freshData, makeBackup, newId, parseBackup } from '../lib/storage';
 import type { AppData, Budget, DietId, Person } from '../lib/types';
@@ -216,6 +216,8 @@ export function SettingsSheet({ data, update, toast, confirm, onClose }: SheetPr
         <DietChips value={data.prefs.diets} onChange={(diets) => setPrefs({ diets })} />
       </section>
 
+      {PROXY_URL && <AccessPanel toast={toast} />}
+
       <section class="panel">
         <label class="check">
           <input type="checkbox" checked={data.prefs.sound} onChange={() => setPrefs({ sound: !data.prefs.sound })} />
@@ -227,7 +229,7 @@ export function SettingsSheet({ data, update, toast, confirm, onClose }: SheetPr
         <h3 class="section-title">Your data</h3>
         <p class="small">
           <Icon name="leaf" size={16} /> Your settings and picks stay <strong>on this device</strong> and don't sync anywhere. To find restaurants, your approximate location is sent to{' '}
-          {SOURCE === 'google' ? 'Google Maps' : 'OpenStreetMap'} — it isn't saved.
+          {currentSource() === 'google' ? 'Google Maps (through this app’s private proxy)' : 'OpenStreetMap'} — it isn't saved.
         </p>
         <div class="btn-row">
           <Button icon="download" onClick={exportData}>
@@ -263,11 +265,61 @@ export function SettingsSheet({ data, update, toast, confirm, onClose }: SheetPr
       </section>
 
       <p class="fine">
-        {SOURCE === 'google'
+        {currentSource() === 'google'
           ? 'Restaurants, ratings and prices from Google Maps.'
           : 'Restaurants © OpenStreetMap contributors (ODbL). Free map data has no ratings, prices or reliable hours — those are one tap away on Google Maps.'}{' '}
         Budget is per person and rough: {priceLabel(1)} ≈ under RM 20, {priceLabel(2)} ≈ RM 20–40, {priceLabel(3)} ≈ RM 40+.
       </p>
     </Sheet>
+  );
+}
+
+/** Access code for Google data (photos, ratings, prices). Without one the app uses free map data. */
+function AccessPanel({ toast }: { toast: (m: string) => void }) {
+  const [saved, setSaved] = useState(getAccessCode());
+  const [draft, setDraft] = useState('');
+  return (
+    <section class="panel">
+      <h3 class="section-title">Google Maps access</h3>
+      {saved ? (
+        <>
+          <p class="small">
+            <Icon name="check" size={16} /> Unlocked — you're seeing Google photos, ratings and prices.
+          </p>
+          <div class="btn-row">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setAccessCode('');
+                setSaved('');
+                toast('Access code removed');
+              }}
+            >
+              Remove code
+            </Button>
+          </div>
+        </>
+      ) : (
+        <form
+          class="code-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!draft.trim()) return;
+            setAccessCode(draft);
+            setSaved(draft.trim());
+            setDraft('');
+            toast('Code saved — close settings to search with Google');
+          }}
+        >
+          <p class="muted small">Got a code from the person who runs this app? Enter it for Google photos, ratings, prices and opening hours.</p>
+          <div class="where">
+            <input aria-label="Access code" placeholder="Access code" value={draft} maxLength={64} autoComplete="off" onInput={(e) => setDraft((e.target as HTMLInputElement).value)} />
+            <Button variant="primary" type="submit">
+              Unlock
+            </Button>
+          </div>
+        </form>
+      )}
+    </section>
   );
 }

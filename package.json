@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "preview:pages": "BASE_PATH=/eat-what/ vite preview --port 4173 --strictPort",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p worker",
+    "worker:deploy": "wrangler deploy --config worker/wrangler.toml",
+    "worker:codes": "wrangler secret put ACCESS_CODES --config worker/wrangler.toml"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.3.0",
@@ -18,9 +20,9 @@
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.6",
-    "@types/google.maps": "^3.66.4",
     "typescript": "5.9",
     "vite": "^8.3.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "wrangler": "^4.138.0"
   }
 }

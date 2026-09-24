@@ -24,13 +24,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run typecheck
       - run: npm test
       - name: Build for https://<user>.github.io/<repo>/
         run: npm run build
         env:
           BASE_PATH: /${{ github.event.repository.name }}/
-          # Optional. Without it the app uses free OpenStreetMap data.
-          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
+          # Public Worker URL (a repo variable, not a secret). The Google key lives only in the Worker.
+          VITE_PLACES_PROXY_URL: ${{ vars.PLACES_PROXY_URL }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

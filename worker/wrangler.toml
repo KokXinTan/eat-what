@@ -1,0 +1,20 @@
+# Cloudflare Worker that holds the Google Maps key and proxies Places API (New).
+# Deploy: npm run worker:deploy   ·   Key: npx wrangler secret put GOOGLE_MAPS_API_KEY
+name = "eat-what-places"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+[vars]
+# Sites allowed to use this proxy (comma-separated origins).
+ALLOWED_ORIGINS = "https://kokxintan.github.io,http://localhost:5173,http://localhost:4173"
+
+# Per-visitor (per IP) limits. Google's own daily quota caps remain the final backstop.
+[[ratelimits]]
+name = "SEARCH_LIMITER"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }
+
+[[ratelimits]]
+name = "PHOTO_LIMITER"
+namespace_id = "1002"
+simple = { limit = 90, period = 60 }
