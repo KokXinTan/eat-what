@@ -100,8 +100,10 @@ function Meta({ r }: { r: Card['r'] }) {
 }
 
 /** The chips already show rating and distance, so lead with a reason that adds something. */
-const REPEATS_META = /^★|away —|^Close by|^Worth the short trip/;
-const frontReason = (card: Card) => card.reasons.find((x) => !REPEATS_META.test(x)) ?? card.reasons[0];
+const REPEATS_META = /^★|away —|^Close by|^Worth the short trip|^Open (now|right now|24 hours)/;
+/** A reason that adds to the chips; else Google's description; else nothing (no repeats). */
+const frontLine = (card: Card) =>
+  card.reasons.find((x) => !REPEATS_META.test(x)) ?? (card.r.id.startsWith('g:') && card.r.summary ? card.r.summary : '');
 
 const dietLine = (card: Card, diets: DietId[]) =>
   `${card.diet.status === 'ok' ? 'Looks suitable' : 'Unverified'}: ${diets.map((d) => DIETS[d].label).join(', ')}`;
@@ -135,10 +137,12 @@ export function CardFace({ card, diets, stamp, onInfo }: { card: Card; diets: Di
           )}
         </div>
         <Meta r={r} />
-        <p class="why-line">
-          <span aria-hidden="true">→ </span>
-          {frontReason(card)}
-        </p>
+        {frontLine(card) && (
+          <p class="why-line">
+            <span aria-hidden="true">→ </span>
+            {frontLine(card)}
+          </p>
+        )}
         {diets.length > 0 && <p class={`diet-line diet-${card.diet.status}`}>{dietLine(card, diets)}</p>}
         {diets.length === 0 && card.headsUp[0] && <p class="diet-line diet-unverified">{card.headsUp[0]}</p>}
       </div>

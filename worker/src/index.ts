@@ -100,6 +100,29 @@ export function googleSearchBody(s: SearchInput) {
     : { url: `${PLACES}/places:searchNearby`, body: { includedTypes: ['restaurant', 'food_court'], maxResultCount: MAX_RESULTS, locationRestriction: { circle } } };
 }
 
+const MAX_REVIEWS = 3;
+const MAX_PHOTOS = 5;
+const AREA_TYPES = ['neighborhood', 'sublocality_level_1', 'sublocality', 'locality'];
+
+type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+/** Drops what the app never shows (full review lists, long address parts) — ~10x smaller. */
+export function slimPlace(p: Json): Json {
+  return {
+    ...p,
+    reviews: (p.reviews ?? []).slice(0, MAX_REVIEWS).map((r: Json) => ({
+      text: { text: r.text?.text ?? '' },
+      authorAttribution: { displayName: r.authorAttribution?.displayName },
+    })),
+    photos: (p.photos ?? []).slice(0, MAX_PHOTOS).map((ph: Json) => ({
+      name: ph.name,
+      authorAttributions: (ph.authorAttributions ?? []).slice(0, 1).map((a: Json) => ({ displayName: a.displayName, uri: a.uri })),
+    })),
+    addressComponents: (p.addressComponents ?? []).filter((c: Json) => (c.types ?? []).some((t: string) => AREA_TYPES.includes(t))),
+    regularOpeningHours: p.regularOpeningHours ? { periods: p.regularOpeningHours.periods ?? [] } : undefined,
+  };
+}
+
 const PHOTO_NAME = /^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/;
 
 export function parsePhoto(params: URLSearchParams): { name: string; width: number } | string {
@@ -219,7 +242,7 @@ export default {
         return json({ error: (data as { error?: { message?: string } }).error?.message ?? 'Google search failed.' }, 502, origin);
       }
       const photoPass = await makePhotoPass(env.GOOGLE_MAPS_API_KEY, Math.floor(Date.now() / 1000));
-      return json({ places: data.places ?? [], photoPass }, 200, origin);
+      return json({ places: ((data.places as Json[]) ?? []).map(slimPlace), photoPass }, 200, origin);
     }
 
     if (url.pathname === '/photo' && req.method === 'GET') {

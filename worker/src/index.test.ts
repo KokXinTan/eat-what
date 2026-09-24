@@ -86,3 +86,28 @@ describe('request handling', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('response slimming', () => {
+  it('keeps what the card needs and drops the bulk', async () => {
+    const { slimPlace } = await import('./index');
+    const place = {
+      id: 'x',
+      displayName: { text: 'Shop' },
+      reviews: Array.from({ length: 5 }, (_, i) => ({ text: { text: `review ${i}` }, originalText: { text: 'long' }, authorAttribution: { displayName: `A${i}`, photoUri: 'u' }, publishTime: 't' })),
+      photos: Array.from({ length: 10 }, (_, i) => ({ name: `places/x/photos/p${i}`, widthPx: 1, authorAttributions: [{ displayName: 'D', uri: 'U', photoUri: 'P' }] })),
+      addressComponents: [
+        { longText: 'SS 2', shortText: 'SS 2', types: ['sublocality_level_1'] },
+        { longText: '47300', types: ['postal_code'] },
+      ],
+      regularOpeningHours: { periods: [{ open: { day: 1, hour: 9, minute: 0 } }], weekdayDescriptions: ['Mon'] },
+    };
+    const s = slimPlace(place);
+    expect(s.reviews).toHaveLength(3);
+    expect(s.reviews[0]).toEqual({ text: { text: 'review 0' }, authorAttribution: { displayName: 'A0' } });
+    expect(s.photos).toHaveLength(5);
+    expect(s.photos[0]).toEqual({ name: 'places/x/photos/p0', authorAttributions: [{ displayName: 'D', uri: 'U' }] });
+    expect(s.addressComponents).toHaveLength(1);
+    expect(s.regularOpeningHours).toEqual({ periods: [{ open: { day: 1, hour: 9, minute: 0 } }] });
+    expect(s.displayName).toEqual({ text: 'Shop' });
+  });
+});
