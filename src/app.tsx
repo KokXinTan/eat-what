@@ -1,0 +1,505 @@
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { ArtDefs } from './components/FoodArt';
+import { GroupSheet, HistorySheet, SettingsSheet, type SheetProps } from './components/Sheets';
+import { CardDetails, CardFace, SwipeCard, type SwipeDir } from './components/SwipeCard';
+import { Button, Icon, PillSelect, Sheet } from './components/ui';
+import { DIETS, dietQuery } from './lib/diet';
+import { findRestaurants, geocode, getLocation, SOURCE, type LatLng } from './lib/places';
+import { buildDeck, effectiveConstraints, type Card } from './lib/rank';
+import { play } from './lib/sound';
+import { STORAGE_KEY, loadData, newId, saveData } from './lib/storage';
+import type { AppData, Distance, Restaurant } from './lib/types';
+
+const TOAST_MS = 2600;
+const SHUFFLE_MS = 700;
+const MAX_SKIPS = 300;
+const HINT_KEY = 'eat-what:swipe-hint-seen';
+
+const DISTANCES: { value: Distance; label: string }[] = [
+  { value: 'walk', label: 'Walk · 800 m' },
+  { value: 'near', label: 'Nearby · 2 km' },
+  { value: 'drive', label: 'Drive · 6 km' },
+];
+const BUDGETS: { value: AppData['prefs']['budget']; label: string }[] = [
+  { value: null, label: 'Any price' },
+  { value: 1, label: '$ · under RM 20' },
+  { value: 2, label: '$$ · up to RM 40' },
+  { value: 3, label: '$$$ · RM 40+' },
+];
+
+type Phase = 'start' | 'locating' | 'where' | 'loading' | 'deck' | 'chosen' | 'error';
+type ConfirmOptions = { title: string; body?: string; confirmLabel: string; danger?: boolean };
+
+const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, reducedMotion() ? 0 : ms));
+
+export function App() {
+  const [data, setData] = useState<AppData>(loadData);
+  const [phase, setPhase] = useState<Phase>('start');
+  const [center, setCenter] = useState<LatLng | null>(null);
+  const [list, setList] = useState<Restaurant[]>([]);
+  const [cards, setCards] = useState<Card[]>([]);
+  const [removed, setRemoved] = useState<string[]>([]);
+  const [index, setIndex] = useState(0);
+  /** The diet/budget/group the current deck was ranked for. */
+  const [dealtFor, setDealtFor] = useState('');
+  const [chosen, setChosen] = useState<{ card: Card; pickId: string } | null>(null);
+  const [error, setError] = useState('');
+  const [area, setArea] = useState('');
+  const [sheet, setSheet] = useState<'group' | 'history' | 'settings' | null>(null);
+  const [details, setDetails] = useState<Card | null>(null);
+  const [toastMsg, setToastMsg] = useState<{ text: string; id: number } | null>(null);
+  const [confirmState, setConfirmState] = useState<(ConfirmOptions & { resolve: (ok: boolean) => void }) | null>(null);
+  const [storageOk, setStorageOk] = useState(true);
+  const [showHint, setShowHint] = useState(() => {
+    try {
+      return !localStorage.getItem(HINT_KEY);
+    } catch {
+      return true;
+    }
+  });
+  const toastTimer = useRef<number>();
+
+  useEffect(() => setStorageOk(saveData(data)), [data]);
+  // Another tab saved newer data: pick it up instead of overwriting it later.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => e.key === STORAGE_KEY && setData(loadData());
+    addEventListener('storage', onStorage);
+    return () => removeEventListener('storage', onStorage);
+  }, []);
+
+  const update = useCallback((change: (d: AppData) => AppData) => setData((d) => change(d)), []);
+  const toast = useCallback((text: string) => {
+    clearTimeout(toastTimer.current);
+    setToastMsg({ text, id: Date.now() });
+    toastTimer.current = window.setTimeout(() => setToastMsg(null), TOAST_MS);
+  }, []);
+  const confirm = useCallback((o: ConfirmOptions) => new Promise<boolean>((resolve) => setConfirmState({ ...o, resolve })), []);
+  const closeConfirm = (ok: boolean) => {
+    confirmState?.resolve(ok);
+    setConfirmState(null);
+  };
+
+  const { diets, budget, people } = effectiveConstraints(data);
+
+  /** Rank a restaurant list into a fresh deck. */
+  const deal = (source: Restaurant[], d: AppData = data) => {
+    const deck = buildDeck(source, d, newId(), new Date());
+    setDealtFor(JSON.stringify(effectiveConstraints(d)));
+    setCards(deck.cards);
+    setRemoved(deck.removed);
+    setIndex(0);
+  };
+
+  const search = async (at: LatLng, d: AppData = data) => {
+    setPhase('loading');
+    setError('');
+    try {
+      const { diets: ds } = effectiveConstraints(d);
+      const [found] = await Promise.all([findRestaurants(at, d.prefs.distance, dietQuery(ds)), sleep(SHUFFLE_MS)]);
+      setList(found);
+      deal(found, d);
+      setPhase('deck');
+      if (found.length) play(d.prefs.sound, 'reveal');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong finding restaurants.');
+      setPhase('error');
+    }
+  };
+
+  const surprise = async () => {
+    if (center) return search(center);
+    setPhase('locating');
+    try {
+      const at = await getLocation();
+      setCenter(at);
+      search(at);
+    } catch (e) {
+      setError(e instanceof Error && e.message !== 'denied' ? e.message : '');
+      setPhase('where');
+    }
+  };
+
+  const searchArea = async (e: Event) => {
+    e.preventDefault();
+    if (!area.trim()) return;
+    setPhase('loading');
+    const at = await geocode(area.trim()).catch(() => null);
+    if (!at) {
+      setError(`Couldn't find “${area.trim()}”. Try a neighbourhood and city, like “SS2 Petaling Jaya”.`);
+      setPhase('where');
+      return;
+    }
+    setCenter(at);
+    search(at);
+  };
+
+  // Settings that change the deck: distance needs a new search, the rest re-rank.
+  const setDistance = (distance: Distance) => {
+    const next = { ...data, prefs: { ...data.prefs, distance } };
+    setData(next);
+    if (center && (phase === 'deck' || phase === 'chosen')) search(center, next);
+  };
+  const setBudget = (b: AppData['prefs']['budget']) => {
+    const next = { ...data, prefs: { ...data.prefs, budget: b } };
+    setData(next);
+    if (phase === 'deck') deal(list, next);
+  };
+  // Diet or group edits in a sheet: re-search when the sheet closes (diet words change the query).
+  const closeSheet = () => {
+    const was = sheet;
+    setSheet(null);
+    if ((was === 'group' || was === 'settings') && center && phase === 'deck') search(center);
+  };
+
+  const card = cards[index];
+  const nextCard = cards[index + 1];
+
+  const swipe = (dir: SwipeDir) => {
+    if (!card) return;
+    if (showHint) {
+      setShowHint(false);
+      try {
+        localStorage.setItem(HINT_KEY, '1');
+      } catch {
+        /* convenience only */
+      }
+    }
+    if (dir === 'left') {
+      play(data.prefs.sound, 'skip');
+      update((d) => ({ ...d, skips: [{ placeId: card.r.id, date: new Date().toISOString() }, ...d.skips].slice(0, MAX_SKIPS) }));
+      setIndex((i) => i + 1);
+      return;
+    }
+    const pickId = newId();
+    update((d) => ({
+      ...d,
+      picks: [{ id: pickId, placeId: card.r.id, name: card.r.name, food: card.r.typeLabel, art: card.r.art, mapsUrl: card.r.mapsUrl, date: new Date().toISOString(), verdict: null }, ...d.picks],
+    }));
+    setChosen({ card, pickId });
+    setPhase('chosen');
+    play(data.prefs.sound, 'celebrate');
+    navigator.vibrate?.(30);
+  };
+
+  const changedMind = () => {
+    if (chosen) update((d) => ({ ...d, picks: d.picks.filter((p) => p.id !== chosen.pickId) }));
+    setChosen(null);
+    setPhase('deck');
+    // Group or diet edited meanwhile: re-rank so clashing places drop out.
+    if (JSON.stringify(effectiveConstraints(data)) !== dealtFor) deal(list);
+    else setIndex((i) => i + 1);
+  };
+
+  const undoSkip = () => {
+    if (index === 0) return;
+    setIndex((i) => i - 1);
+    update((d) => ({ ...d, skips: d.skips.slice(1) }));
+  };
+
+  useEffect(() => {
+    if (phase !== 'deck' || sheet || details || confirmState) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).closest('input, textarea, select')) return;
+      if (e.key === 'ArrowLeft') swipe('left');
+      if (e.key === 'ArrowRight') swipe('right');
+    };
+    addEventListener('keydown', onKey);
+    return () => removeEventListener('keydown', onKey);
+  });
+
+  const sheetProps: SheetProps = { data, update, toast, confirm, onClose: closeSheet };
+  const forLine = [people > 1 ? `For ${people}` : null, ...diets.map((d) => DIETS[d].label)].filter(Boolean).join(' · ');
+
+  return (
+    <>
+      <ArtDefs />
+      <div class="shell">
+        <header class="topbar">
+          <button type="button" class="logo" onClick={() => setPhase('start')} aria-label="Eat What? — back to start">
+            <span class="logo-mark" aria-hidden="true">
+              <svg viewBox="0 0 40 40" width="34" height="34">
+                <g filter="url(#ew-rough)">
+                  <circle cx="20" cy="21" r="16" fill="#D8452B" />
+                  <path d="M9 19 h22 a11 11 0 0 1 -22 0z" fill="#FBF3E4" />
+                  <circle cx="20" cy="12" r="4" fill="#E3A72F" />
+                </g>
+              </svg>
+            </span>
+            Eat What?
+          </button>
+          <nav class="top-actions" aria-label="More">
+            <button type="button" class="icon-btn" aria-label={`Who's eating${people > 1 ? ` (${people} people)` : ''}`} onClick={() => setSheet('group')}>
+              <Icon name="people" />
+              {people > 1 && <span class="dot-badge">{people}</span>}
+            </button>
+            <button type="button" class="icon-btn" aria-label="Your picks" onClick={() => setSheet('history')}>
+              <Icon name="clock" />
+            </button>
+            <button type="button" class="icon-btn" aria-label="Settings" onClick={() => setSheet('settings')}>
+              <Icon name="user" />
+            </button>
+          </nav>
+        </header>
+
+        {!storageOk && (
+          <p class="notice notice-warn" role="alert">
+            This browser isn't letting me save (private mode or storage full). Your picks will be forgotten when you close the tab.
+          </p>
+        )}
+
+        <main id="main">
+          {phase === 'start' && (
+            <section class="start">
+              <h1>
+                What are we <span class="brush">eating?</span>
+              </h1>
+              <p class="lede">One tap. Swipe through what's good nearby — right to go, left to skip.</p>
+              <Button variant="primary" size="lg" class="btn-surprise" icon="spark" onClick={surprise}>
+                Surprise me
+              </Button>
+            </section>
+          )}
+
+          {phase === 'locating' && <Status text="Finding where you are…" />}
+          {phase === 'loading' && <Deal />}
+
+          {phase === 'where' && (
+            <section class="start">
+              <h2 class="h-sm">Where are you eating?</h2>
+              <p class="lede">{error || "Location is off, so tell me the area instead."}</p>
+              <form class="where" onSubmit={searchArea}>
+                <input aria-label="Area" placeholder="e.g. SS2 Petaling Jaya" value={area} maxLength={80} onInput={(e) => setArea((e.target as HTMLInputElement).value)} autoFocus />
+                <Button variant="primary" type="submit" icon="search">
+                  Go
+                </Button>
+              </form>
+              <button type="button" class="link small" onClick={surprise}>
+                Try my location again
+              </button>
+            </section>
+          )}
+
+          {phase === 'error' && (
+            <section class="start">
+              <h2 class="h-sm">Hmm, that didn't work</h2>
+              <p class="lede">{error}</p>
+              <Button variant="primary" size="lg" icon="shuffle" onClick={() => (center ? search(center) : surprise())}>
+                Try again
+              </Button>
+            </section>
+          )}
+
+          {(phase === 'start' || phase === 'deck' || phase === 'chosen') && (
+            <div class="filters" aria-label="Filters">
+              <PillSelect icon="pin" label="Distance" value={data.prefs.distance} onChange={setDistance} options={DISTANCES} />
+              <PillSelect icon="wallet" label="Budget per person" value={data.prefs.budget} onChange={setBudget} options={BUDGETS} />
+              {forLine && (
+                <button type="button" class="pill for-line" onClick={() => setSheet(people > 1 ? 'group' : 'settings')}>
+                  <Icon name={people > 1 ? 'people' : 'leaf'} size={15} /> {forLine}
+                </button>
+              )}
+            </div>
+          )}
+
+          {phase === 'deck' && card && (
+            <section class="deck-area">
+              <div class="stack">
+                {nextCard && (
+                  <article class="card is-next" aria-hidden="true">
+                    <CardFace card={nextCard} diets={diets} />
+                  </article>
+                )}
+                <SwipeCard key={card.r.id} card={card} diets={diets} onSwipe={swipe} onInfo={() => setDetails(card)} />
+                {showHint && (
+                  <p class="swipe-hint" aria-hidden="true">
+                    <span>← not today</span>
+                    <span>let's go →</span>
+                  </p>
+                )}
+              </div>
+              <div class="swipe-buttons">
+                <button type="button" class="round round-undo" aria-label="Undo last skip" onClick={undoSkip} disabled={index === 0}>
+                  <Icon name="undo" size={18} />
+                </button>
+                <button type="button" class="round round-no" aria-label="Not today" onClick={() => swipe('left')}>
+                  <Icon name="x" size={28} />
+                </button>
+                <button type="button" class="round round-yes" aria-label="Let's go here" onClick={() => swipe('right')}>
+                  <Icon name="check" size={30} />
+                </button>
+                <span class="round-count" aria-live="polite">
+                  {cards.length - index - 1 > 0 ? `+${cards.length - index - 1}` : 'last'}
+                </span>
+              </div>
+            </section>
+          )}
+
+          {phase === 'deck' && !card && (
+            <section class="start">
+              <h2 class="h-sm">{cards.length ? "That's everything nearby" : 'Nothing nearby fits'}</h2>
+              <p class="lede">
+                {cards.length
+                  ? `You've seen all ${cards.length}.`
+                  : list.length
+                    ? `I found ${list.length} places, but:`
+                    : SOURCE === 'osm'
+                      ? 'The free map has no restaurants listed this close.'
+                      : 'No restaurants found this close.'}
+              </p>
+              {removed.length > 0 && (
+                <ul class="blockers">
+                  {removed.map((b) => (
+                    <li key={b}>{b}</li>
+                  ))}
+                </ul>
+              )}
+              <div class="action-main">
+                {data.prefs.distance !== 'drive' && (
+                  <Button variant="primary" size="lg" onClick={() => setDistance('drive')}>
+                    Look further
+                  </Button>
+                )}
+                {cards.length > 0 && (
+                  <Button variant="secondary" size="lg" icon="shuffle" onClick={() => deal(list)}>
+                    Shuffle again
+                  </Button>
+                )}
+                {budget !== null && (
+                  <Button variant="secondary" size="lg" onClick={() => setBudget(null)}>
+                    Any budget
+                  </Button>
+                )}
+              </div>
+            </section>
+          )}
+
+          {phase === 'chosen' && chosen && (
+            <section class="deck-area">
+              <div class="stack">
+                <article class="card is-chosen">
+                  <CardFace card={chosen.card} diets={diets} stamp="Let's go!" onInfo={() => setDetails(chosen.card)} />
+                  <Splats />
+                </article>
+              </div>
+              <div class="action-main chosen-actions">
+                <a class="btn btn-primary btn-lg" href={chosen.card.r.mapsUrl} target="_blank" rel="noopener noreferrer">
+                  <Icon name="map" size={22} />
+                  <span>Take me there</span>
+                </a>
+                <Button variant="secondary" size="lg" onClick={changedMind}>
+                  Changed my mind
+                </Button>
+              </div>
+              <p class="remaining">Saved to your picks — rate it later with 👍 or 👎.</p>
+            </section>
+          )}
+        </main>
+      </div>
+
+      {details && (
+        <Sheet
+          open
+          title={details.r.name}
+          onClose={() => setDetails(null)}
+          footer={
+            <>
+              <a class="btn btn-ghost" href={details.r.mapsUrl} target="_blank" rel="noopener noreferrer">
+                <Icon name="map" size={18} />
+                <span>Google Maps</span>
+              </a>
+              {phase === 'deck' && details.r.id === card?.r.id && (
+                <Button
+                  variant="primary"
+                  icon="check"
+                  onClick={() => {
+                    setDetails(null);
+                    swipe('right');
+                  }}
+                >
+                  Let's go here
+                </Button>
+              )}
+            </>
+          }
+        >
+          <CardDetails card={details} diets={diets} />
+        </Sheet>
+      )}
+      {sheet === 'group' && <GroupSheet {...sheetProps} />}
+      {sheet === 'history' && <HistorySheet {...sheetProps} />}
+      {sheet === 'settings' && <SettingsSheet {...sheetProps} />}
+
+      <div class="toast-wrap" aria-live="polite" role="status">
+        {toastMsg && (
+          <div class="toast" key={toastMsg.id}>
+            {toastMsg.text}
+          </div>
+        )}
+      </div>
+      <Sheet
+        open={Boolean(confirmState)}
+        title={confirmState?.title ?? ''}
+        onClose={() => closeConfirm(false)}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => closeConfirm(false)}>
+              Cancel
+            </Button>
+            <Button variant={confirmState?.danger ? 'danger' : 'primary'} onClick={() => closeConfirm(true)}>
+              {confirmState?.confirmLabel}
+            </Button>
+          </>
+        }
+      >
+        {confirmState?.body && <p>{confirmState.body}</p>}
+      </Sheet>
+    </>
+  );
+}
+
+function Status({ text }: { text: string }) {
+  return (
+    <p class="status" role="status">
+      {text}
+    </p>
+  );
+}
+
+function Deal() {
+  return (
+    <div class="deck" role="status" aria-label="Finding places nearby…">
+      <span class="deck-card c1" />
+      <span class="deck-card c2" />
+      <span class="deck-card c3">
+        <span>?</span>
+      </span>
+      <p class="deck-label">Sniffing out what's nearby…</p>
+    </div>
+  );
+}
+
+const SPLAT_COLOURS = ['#D8452B', '#E3A72F', '#7A8450', '#F4CB63', '#A8321D', '#AAB27A'];
+
+function Splats() {
+  return (
+    <div class="splats" aria-hidden="true">
+      {SPLAT_COLOURS.concat(SPLAT_COLOURS).map((c, i) => {
+        const angle = (i / 12) * Math.PI * 2 + 0.3;
+        const dist = 110 + (i % 3) * 30;
+        return (
+          <span
+            key={i}
+            style={{
+              background: c,
+              '--dx': `${Math.round(Math.cos(angle) * dist)}px`,
+              '--dy': `${Math.round(Math.sin(angle) * dist)}px`,
+              '--s': `${0.6 + (i % 4) * 0.25}`,
+              animationDelay: `${(i % 4) * 30}ms`,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
