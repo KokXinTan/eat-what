@@ -358,6 +358,12 @@ export function openStatus(periods: Period[] | undefined, utcOffsetMinutes: numb
   return { open: false };
 }
 
+/** Alternate Google's ordering by day: popular places one day, closest (often smaller, local) the next. */
+export function dailyRank(now = new Date()): 'POPULARITY' | 'DISTANCE' {
+  const day = Math.floor((now.getTime() - now.getTimezoneOffset() * 60_000) / 86_400_000);
+  return day % 2 ? 'DISTANCE' : 'POPULARITY';
+}
+
 async function searchGoogle(center: LatLng, radius: number, textQuery: string | null): Promise<Restaurant[]> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), SEARCH_TIMEOUT_MS);
@@ -366,7 +372,7 @@ async function searchGoogle(center: LatLng, radius: number, textQuery: string | 
     res = await fetch(`${PROXY_URL}/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Access-Code': getAccessCode() },
-      body: JSON.stringify({ lat: center.lat, lng: center.lng, radius, query: textQuery }),
+      body: JSON.stringify({ lat: center.lat, lng: center.lng, radius, query: textQuery, rank: dailyRank() }),
       signal: ctl.signal,
     });
   } catch {
@@ -423,7 +429,7 @@ export async function findRestaurants(center: LatLng, distance: Distance, textQu
   const radius = RADIUS_M[distance];
   // OSM ignores the diet words, so they only split the cache for Google.
   const source = currentSource();
-  const key = `${source}:${center.lat.toFixed(3)},${center.lng.toFixed(3)}:${radius}:${source === 'google' ? textQuery ?? '' : ''}`;
+  const key = `${source}:${center.lat.toFixed(3)},${center.lng.toFixed(3)}:${radius}:${source === 'google' ? `${textQuery ?? ''}:${dailyRank()}` : ''}`;
   const cached = readCache(key);
   if (cached) return cached;
   const search = source === 'google' ? () => searchGoogle(center, radius, textQuery) : () => searchOsm(center, radius);

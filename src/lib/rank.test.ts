@@ -159,3 +159,22 @@ describe('opening hours in ranking', () => {
     }
   });
 });
+
+describe('freshness across days', () => {
+  const list = [r({ id: 'a', name: 'A' }), r({ id: 'b', name: 'B' })];
+  const skippedDaysAgo = (days: number) => data({ skips: [{ placeId: 'a', date: new Date(NOW.getTime() - days * 86400e3).toISOString() }] });
+  const scoreOf = (d: AppData) => buildDeck(list, d, 'same-seed', NOW).cards.find((c) => c.r.id === 'a')!.score;
+
+  it('a skipped place sinks, then fades back over about five days', () => {
+    const fresh = scoreOf(data());
+    expect(scoreOf(skippedDaysAgo(0))).toBeLessThan(scoreOf(skippedDaysAgo(3)));
+    expect(scoreOf(skippedDaysAgo(3))).toBeLessThan(fresh);
+    expect(scoreOf(skippedDaysAgo(6))).toBeCloseTo(fresh);
+  });
+
+  it('different deals shuffle similar places differently', () => {
+    const many = Array.from({ length: 12 }, (_, i) => r({ id: `p${i}`, name: `P${i}` }));
+    const orders = new Set(['s1', 's2', 's3', 's4'].map((seed) => ids(many, data(), seed).slice(0, 5).join()));
+    expect(orders.size).toBeGreaterThan(1);
+  });
+});

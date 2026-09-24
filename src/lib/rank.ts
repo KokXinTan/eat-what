@@ -22,12 +22,13 @@ export const WEIGHTS = {
   snackOutsideTea: -1.5,
   closingSoon: -4,
   chain: -1,
-  jitter: 1.5,
+  jitter: 2.5,
 } as const;
 
 const DAY_MS = 86_400_000;
 const RECENT_PICK_DAYS = 3;
-const SKIP_MEMORY_DAYS = 2;
+/** Skipped places sink for a few days, fading back gradually. */
+const SKIP_MEMORY_DAYS = 5;
 const POPULAR_REVIEWS = 300;
 const CLOSE_BY_M = 500;
 /** Ratings pulled towards this with few reviews (Bayesian average). */
@@ -163,9 +164,8 @@ export function buildDeck(list: Restaurant[], data: AppData, seed: string, now: 
     } else if (lastPick && r.art !== lastPick.art && daysAgo(lastPick.date, now) < RECENT_PICK_DAYS && lastPick.food) {
       f.push({ points: 0.5, text: `A change from ${lastPick.name} last time.` });
     }
-    if (data.skips.some((s) => s.placeId === r.id && daysAgo(s.date, now) < SKIP_MEMORY_DAYS)) {
-      f.push({ points: WEIGHTS.skippedRecently });
-    }
+    const skip = data.skips.find((s) => s.placeId === r.id && daysAgo(s.date, now) < SKIP_MEMORY_DAYS);
+    if (skip) f.push({ points: WEIGHTS.skippedRecently * (1 - daysAgo(skip.date, now) / SKIP_MEMORY_DAYS) });
     if (budget !== null) {
       if (r.price === null) f.push({ points: WEIGHTS.priceUnknown });
       else f.push({ points: 0.3, text: people > 1 ? `${priceLabel(r.price)} — fits everyone's budget.` : `${priceLabel(r.price)} — inside your budget.` });

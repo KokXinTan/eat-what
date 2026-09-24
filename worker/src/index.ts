@@ -83,6 +83,8 @@ export interface SearchInput {
   lng: number;
   radius: number;
   query: string | null;
+  /** POPULARITY (default) or DISTANCE — the app alternates by day for a fresher pool. */
+  rank: 'POPULARITY' | 'DISTANCE';
 }
 
 /** Validates the JSON body of /search. Returns an error message or the clean input. */
@@ -100,7 +102,8 @@ export function parseSearch(body: unknown): SearchInput | string {
     if (typeof b.query !== 'string' || !b.query.trim() || b.query.length > MAX_QUERY_CHARS) return 'Bad query.';
     query = b.query.trim();
   }
-  return { lat, lng, radius: Math.round(radius), query };
+  const rank = b.rank === 'DISTANCE' ? 'DISTANCE' : 'POPULARITY';
+  return { lat, lng, radius: Math.round(radius), query, rank };
 }
 
 /** Google request body for a nearby (or diet-keyword) restaurant search. */
@@ -108,7 +111,10 @@ export function googleSearchBody(s: SearchInput) {
   const circle = { center: { latitude: s.lat, longitude: s.lng }, radius: s.radius };
   return s.query
     ? { url: `${PLACES}/places:searchText`, body: { textQuery: s.query, maxResultCount: MAX_RESULTS, locationBias: { circle } } }
-    : { url: `${PLACES}/places:searchNearby`, body: { includedTypes: ['restaurant', 'food_court'], maxResultCount: MAX_RESULTS, locationRestriction: { circle } } };
+    : {
+        url: `${PLACES}/places:searchNearby`,
+        body: { includedTypes: ['restaurant', 'food_court'], maxResultCount: MAX_RESULTS, locationRestriction: { circle }, rankPreference: s.rank },
+      };
 }
 
 const MAX_REVIEWS = 3;

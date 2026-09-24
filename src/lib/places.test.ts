@@ -103,3 +103,13 @@ describe('Google Places (via the Worker) mapping', () => {
     expect(fromGoogle({ ...base, displayName: undefined }, KL, photo)).toBeNull();
   });
 });
+
+describe('daily Google ordering', () => {
+  it('alternates popular and nearest by day', async () => {
+    const { dailyRank } = await import('./places');
+    const a = dailyRank(new Date('2026-09-24T12:00:00'));
+    const b = dailyRank(new Date('2026-09-25T12:00:00'));
+    expect(new Set([a, b])).toEqual(new Set(['POPULARITY', 'DISTANCE']));
+    expect(dailyRank(new Date('2026-09-24T01:00:00'))).toBe(dailyRank(new Date('2026-09-24T23:00:00')));
+  });
+});

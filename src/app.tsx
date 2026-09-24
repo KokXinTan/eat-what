@@ -14,6 +14,9 @@ import type { AppData, Distance, Restaurant } from './lib/types';
 
 const TOAST_MS = 2600;
 const SHUFFLE_MS = 700;
+const ROLL_MS = 900;
+/** Feeling lucky picks from the best few remaining places, never a poor one. */
+const LUCKY_POOL = 6;
 const MAX_SKIPS = 300;
 const HINT_KEY = 'eat-what:swipe-hint-seen';
 
@@ -29,7 +32,7 @@ const BUDGETS: { value: AppData['prefs']['budget']; label: string }[] = [
   { value: 3, label: '$$$ · RM 40+' },
 ];
 
-type Phase = 'start' | 'locating' | 'where' | 'loading' | 'deck' | 'chosen' | 'error';
+type Phase = 'start' | 'locating' | 'where' | 'loading' | 'rolling' | 'deck' | 'chosen' | 'error';
 type ConfirmOptions = { title: string; body?: string; confirmLabel: string; danger?: boolean };
 
 const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -45,7 +48,7 @@ export function App() {
   const [index, setIndex] = useState(0);
   /** The diet/budget/group the current deck was ranked for. */
   const [dealtFor, setDealtFor] = useState('');
-  const [chosen, setChosen] = useState<{ card: Card; pickId: string } | null>(null);
+  const [chosen, setChosen] = useState<{ card: Card; pickId: string; stamp: string } | null>(null);
   const [error, setError] = useState('');
   const [area, setArea] = useState('');
   const [sheet, setSheet] = useState<'group' | 'history' | 'settings' | null>(null);
@@ -224,19 +227,56 @@ export function App() {
       setIndex((i) => i + 1);
       return;
     }
+    choose(card);
+  };
+
+  const choose = (c: Card, stamp = "Let's go!") => {
     const pickId = newId();
     update((d) => ({
       ...d,
-      picks: [{ id: pickId, placeId: card.r.id, name: card.r.name, food: card.r.typeLabel, art: card.r.art, mapsUrl: card.r.mapsUrl, date: new Date().toISOString(), verdict: null }, ...d.picks],
+      picks: [{ id: pickId, placeId: c.r.id, name: c.r.name, food: c.r.typeLabel, art: c.r.art, mapsUrl: c.r.mapsUrl, date: new Date().toISOString(), verdict: null }, ...d.picks],
     }));
-    setChosen({ card, pickId });
+    setChosen({ card: c, pickId, stamp });
     setPhase('chosen');
     play(data.prefs.sound, 'celebrate');
     navigator.vibrate?.(30);
   };
 
+  /** 🎲 Roll the dice: a quick shuffle, then land on one of the best few remaining places. */
+  const lucky = () => {
+    const pool = cards.slice(index, index + LUCKY_POOL);
+    if (!pool.length) return;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    // Put it at the current position so "Changed my mind" and ↺ behave as usual.
+    setCards((cs) => [...cs.slice(0, index), pick, ...cs.slice(index).filter((c) => c !== pick)]);
+    setPhase('rolling');
+    play(data.prefs.sound, 'skip');
+    window.setTimeout(() => choose(pick, 'Feeling lucky!'), reducedMotion() ? 0 : ROLL_MS);
+  };
+
+  /** 🔀 Reorder the cards you haven't seen yet. */
+  const shuffleDeck = () => {
+    setCards((cs) => {
+      const rest = cs.slice(index);
+      for (let i = rest.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [rest[i], rest[j]] = [rest[j], rest[i]];
+      }
+      return [...cs.slice(0, index), ...rest];
+    });
+    play(data.prefs.sound, 'skip');
+    toast('Shuffled');
+  };
+
+  // Changing your mind counts as a skip, so ↺ can bring the place back.
   const changedMind = () => {
-    if (chosen) update((d) => ({ ...d, picks: d.picks.filter((p) => p.id !== chosen.pickId) }));
+    if (chosen)
+      update((d) => ({
+        ...d,
+        picks: d.picks.filter((p) => p.id !== chosen.pickId),
+        skips: [{ placeId: chosen.card.r.id, date: new Date().toISOString() }, ...d.skips].slice(0, MAX_SKIPS),
+      }));
+    play(data.prefs.sound, 'skip');
     setChosen(null);
     setPhase('deck');
     // Group or diet edited meanwhile: re-rank so clashing places drop out.
@@ -335,6 +375,7 @@ export function App() {
 
           {phase === 'locating' && <Status text="Finding where you are…" />}
           {phase === 'loading' && <Deal />}
+          {phase === 'rolling' && <Deal label="Rolling the dice…" />}
 
           {phase === 'where' && (
             <section class="start">
@@ -366,6 +407,11 @@ export function App() {
             <div class="filters" aria-label="Filters">
               <PillSelect icon="pin" label="Distance" value={data.prefs.distance} onChange={setDistance} options={DISTANCES} />
               <PillSelect icon="wallet" label="Budget per person" value={data.prefs.budget} onChange={setBudget} options={BUDGETS} />
+              {phase === 'deck' && cards.length - index > 2 && (
+                <button type="button" class="pill pill-icon" onClick={shuffleDeck} aria-label={`Shuffle the ${cards.length - index} places left`} title="Shuffle">
+                  <Icon name="shuffle" size={17} />
+                </button>
+              )}
               {forLine && (
                 <button type="button" class="pill for-line" onClick={() => setSheet(people > 1 ? 'group' : 'settings')}>
                   <Icon name={people > 1 ? 'people' : 'leaf'} size={15} /> {forLine}
@@ -395,9 +441,9 @@ export function App() {
                 <button type="button" class="round round-yes" aria-label="Let's go here" onClick={() => swipe('right')}>
                   <Icon name="check" size={30} />
                 </button>
-                <span class="round-count" aria-live="polite">
-                  {cards.length - index - 1 > 0 ? `+${cards.length - index - 1}` : 'last'}
-                </span>
+                <button type="button" class="round round-lucky" aria-label="I'm feeling lucky — pick one for me" title="I'm feeling lucky" onClick={lucky}>
+                  <Icon name="dice" size={22} />
+                </button>
               </div>
             </section>
           )}
@@ -445,7 +491,7 @@ export function App() {
             <section class="deck-area">
               <div class="stack">
                 <article class="card is-chosen">
-                  <CardFace card={chosen.card} diets={diets} stamp="Let's go!" />
+                  <CardFace card={chosen.card} diets={diets} stamp={chosen.stamp} />
                   <Splats />
                 </article>
               </div>
@@ -523,7 +569,7 @@ function Status({ text }: { text: string }) {
   );
 }
 
-function Deal() {
+function Deal({ label = "Sniffing out what's nearby…" }: { label?: string }) {
   return (
     <div class="deck" role="status" aria-label="Finding places nearby…">
       <span class="deck-card c1" />
@@ -531,7 +577,7 @@ function Deal() {
       <span class="deck-card c3">
         <span>?</span>
       </span>
-      <p class="deck-label">Sniffing out what's nearby…</p>
+      <p class="deck-label">{label}</p>
     </div>
   );
 }

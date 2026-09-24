@@ -557,7 +557,7 @@ export function artUrl(kind: ArtKind, variant?: string): string {
   return url;
 }
 
-export function FoodArt({ kind, variant, size = '100%', class: className, label }: FoodArtProps) {
+export function FoodArt({ kind, variant, size, class: className, label }: FoodArtProps) {
   const fixed = typeof size === 'number';
   return (
     <img
@@ -565,7 +565,7 @@ export function FoodArt({ kind, variant, size = '100%', class: className, label 
       class={`art ${className ?? ''}`}
       width={fixed ? size : undefined}
       height={fixed ? size : undefined}
-      style={fixed ? undefined : { width: size, height: 'auto' }}
+      style={fixed || size === undefined ? undefined : { width: size, height: 'auto' }}
       alt={label ?? ''}
       aria-hidden={label ? undefined : 'true'}
       draggable={false}

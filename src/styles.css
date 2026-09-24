@@ -1356,16 +1356,16 @@ main {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   margin: 2px 0 12px;
 }
 .pill {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-height: 38px;
-  padding: 0 12px;
+  padding: 0 11px;
   border: 1.5px solid var(--line-strong);
   border-radius: 999px;
   background: var(--card-2);
@@ -1377,6 +1377,11 @@ main {
 }
 .pill .icon {
   color: var(--tomato);
+}
+.pill-icon {
+  width: 38px;
+  padding: 0;
+  justify-content: center;
 }
 .pill-chevron {
   color: var(--muted) !important;
@@ -1427,6 +1432,20 @@ main {
   border-width: 2px;
   box-shadow: 0 3px 0 var(--line-strong);
   color: var(--ink-2);
+}
+.round-lucky {
+  width: 48px;
+  height: 48px;
+  border-width: 2px;
+  background: var(--mustard-soft);
+  box-shadow: 0 3px 0 var(--mustard-deep);
+  color: var(--ink);
+}
+.round-lucky:active {
+  box-shadow: 0 0 0 var(--mustard-deep);
+}
+.round-lucky .icon {
+  stroke-width: 2.4;
 }
 .round-count {
   width: 44px;
@@ -1676,6 +1695,10 @@ main {
 
 .art {
   display: block;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
 }

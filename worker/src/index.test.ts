@@ -45,7 +45,9 @@ function env(): Env {
 
 describe('input validation', () => {
   it('accepts a normal search and rejects junk', () => {
-    expect(parseSearch({ lat: 3.1, lng: 101.6, radius: 2000 })).toEqual({ lat: 3.1, lng: 101.6, radius: 2000, query: null });
+    expect(parseSearch({ lat: 3.1, lng: 101.6, radius: 2000 })).toEqual({ lat: 3.1, lng: 101.6, radius: 2000, query: null, rank: 'POPULARITY' });
+    expect(parseSearch({ lat: 3.1, lng: 101.6, radius: 2000, rank: 'DISTANCE' })).toMatchObject({ rank: 'DISTANCE' });
+    expect(parseSearch({ lat: 3.1, lng: 101.6, radius: 2000, rank: 'EVIL' })).toMatchObject({ rank: 'POPULARITY' });
     expect(parseSearch({ lat: 3.1, lng: 101.6, radius: 2000, query: ' halal food ' })).toMatchObject({ query: 'halal food' });
     expect(parseSearch({ lat: 91, lng: 0, radius: 2000 })).toBe('Bad lat.');
     expect(parseSearch({ lat: 3, lng: 101, radius: 50_000 })).toBe('Bad radius.');
@@ -54,8 +56,8 @@ describe('input validation', () => {
   });
 
   it('builds nearby vs text searches', () => {
-    expect(googleSearchBody({ lat: 1, lng: 2, radius: 800, query: null }).url).toMatch(/searchNearby$/);
-    expect(googleSearchBody({ lat: 1, lng: 2, radius: 800, query: 'vegan food' }).url).toMatch(/searchText$/);
+    expect(googleSearchBody({ lat: 1, lng: 2, radius: 800, query: null, rank: 'DISTANCE' })).toMatchObject({ url: expect.stringMatching(/searchNearby$/), body: { rankPreference: 'DISTANCE' } });
+    expect(googleSearchBody({ lat: 1, lng: 2, radius: 800, query: 'vegan food', rank: 'POPULARITY' }).url).toMatch(/searchText$/);
   });
 
   it('only allows well-formed photo names (no path tricks)', () => {
