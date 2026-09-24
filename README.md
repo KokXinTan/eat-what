@@ -13,7 +13,11 @@ Can't decide where to eat? Tap **Start swiping** and go through what's good near
   prefers a change from your last pick.
 - **Dietary needs** (halal, no pork, no beef, vegetarian, vegan): clear clashes are hidden;
   anything map data can't confirm is marked **unverified**, never "safe".
-- **Group mode:** add friends' diets and budgets; picks must suit everyone.
+- **Swipe together:** start a session, share the link, and everyone swipes the same places on
+  their own phone. When everyone swipes right on one place — *it's a match*. People with an
+  access code join instantly; anyone else waits until the host taps **Let in**. Everyone's
+  diets apply to the whole group. Sessions delete themselves after 6 hours.
+- **Or choose on one phone:** add friends' diets and budgets; picks must suit everyone.
 - **Private by default:** settings and picks live in this browser only (export/import JSON
   backup in Settings). Your location is sent to the map service to search, and isn't stored.
 
@@ -48,6 +52,10 @@ One-time setup (free Cloudflare plan is plenty):
 
 **Manage access:** run `npm run worker:codes` again with the new list (e.g. drop `aina-p9q3` to
 revoke Aina), or edit the `ACCESS_CODES` secret in the Cloudflare dashboard. No redeploy needed.
+
+**Swipe-together sessions** live in a Cloudflare Durable Object (free plan, SQLite-backed), one
+per room, auto-deleted after 6 hours. Only people with an access code can start one; joiners
+without a code stay "pending" (and see nothing) until the host approves them.
 
 **Protection layers:** the Worker only serves your site's origins, validates inputs, needs a
 valid code for searches, issues 1-hour signed passes for photos, and rate-limits each visitor
@@ -85,7 +93,8 @@ src/
     rank.ts             deterministic scoring → deck + "why this, today"
     diet.ts             dietary rules (conflict / unverified / ok)
     storage.ts          localStorage + validated backup import
-worker/src/index.ts     Cloudflare Worker: holds the key, access codes, rate limits
+worker/src/index.ts     Cloudflare Worker: holds the key, access codes, rate limits, routes
+worker/src/room*.ts     swipe-together rooms (Durable Object + pure rules)
 ```
 
 ## Limits

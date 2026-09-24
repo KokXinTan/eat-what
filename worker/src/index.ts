@@ -4,6 +4,15 @@
 // Photos can't carry a header, so each search returns a short-lived signed photo pass.
 // Google's per-day quota caps are the final backstop.
 
+import { Room, TRUSTED_CODE_HEADER } from './room';
+
+export { Room };
+
+interface DurableNamespace {
+  idFromName(name: string): unknown;
+  get(id: unknown): { fetch(req: Request): Promise<Response> };
+}
+
 interface RateLimiter {
   limit(options: { key: string }): Promise<{ success: boolean }>;
 }
@@ -15,6 +24,8 @@ export interface Env {
   ALLOWED_ORIGINS: string;
   SEARCH_LIMITER: RateLimiter;
   PHOTO_LIMITER: RateLimiter;
+  ROOM_LIMITER: RateLimiter;
+  ROOMS: DurableNamespace;
 }
 
 const PLACES = 'https://places.googleapis.com/v1';
@@ -123,6 +134,23 @@ export function slimPlace(p: Json): Json {
   };
 }
 
+const ROOM_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const ROOM_ID_LENGTH = 6;
+const ROOM_ID = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/;
+const ROOM_ACTIONS = ['join', 'state', 'vote', 'decide', 'leave'];
+const CREATE_ATTEMPTS = 3;
+
+/** Short, unambiguous room code like "K7XQ2M" (no 0/O, 1/I/L). */
+export function newRoomId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(ROOM_ID_LENGTH));
+  return [...bytes].map((b) => ROOM_ALPHABET[b % ROOM_ALPHABET.length]).join('');
+}
+
+/** Swaps any photo pass inside stored place data for a fresh one (passes expire hourly). */
+export function refreshPhotoPasses(body: string, pass: string): string {
+  return body.replace(/pass=[A-Za-z0-9._%-]+/g, `pass=${encodeURIComponent(pass)}`);
+}
+
 const PHOTO_NAME = /^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/;
 
 export function parsePhoto(params: URLSearchParams): { name: string; width: number } | string {
@@ -171,9 +199,13 @@ async function hmac(secret: string, message: string): Promise<string> {
   return btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-/** "expiry.signature" — lets <img> requests prove a recent authorised search. */
+/**
+ * "expiry.signature" — lets <img> requests prove a recent authorised search. The expiry is
+ * rounded to the hour so the pass (and so every photo URL) stays identical between room refreshes;
+ * otherwise phones would re-download every photo on each poll. Valid for 1–2 hours.
+ */
 export async function makePhotoPass(secret: string, nowSec: number): Promise<string> {
-  const exp = nowSec + PHOTO_PASS_SECONDS;
+  const exp = (Math.floor(nowSec / PHOTO_PASS_SECONDS) + 2) * PHOTO_PASS_SECONDS;
   return `${exp}.${await hmac(secret, `photo:${exp}`)}`;
 }
 
@@ -217,6 +249,44 @@ export default {
     if (!origin) return json({ error: 'Not allowed.' }, 403, null);
 
     const ip = req.headers.get('CF-Connecting-IP') ?? 'unknown';
+
+    // ---- Swipe together: /rooms (create) and /rooms/:id/:action ----
+    if (url.pathname === '/rooms' || url.pathname.startsWith('/rooms/')) {
+      if (!(await env.ROOM_LIMITER.limit({ key: ip })).success) return json({ error: 'Too many requests — slow down a little.' }, 429, origin);
+      const [, , roomId, action] = url.pathname.split('/');
+      const codeValid = validCode(req.headers.get(CODE_HEADER), env.ACCESS_CODES);
+      const forward = async (id: string, act: string, body?: string) => {
+        const stub = env.ROOMS.get(env.ROOMS.idFromName(id));
+        // Build a fresh request so a client can't smuggle in the trusted header.
+        const inner = new Request(`https://room/${act}${url.search}`, {
+          method: body === undefined ? 'GET' : 'POST',
+          headers: { 'Content-Type': 'application/json', [TRUSTED_CODE_HEADER]: codeValid ? '1' : '0' },
+          body,
+        });
+        return stub.fetch(inner);
+      };
+      if (!roomId && req.method === 'POST') {
+        // Only people with an access code can start a session (it spends your Google quota).
+        if (!codeValid) return json({ error: 'Starting a session needs an access code.' }, 401, origin);
+        const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+        for (let i = 0; i < CREATE_ATTEMPTS; i++) {
+          const id = newRoomId();
+          const res = await forward(id, 'create', JSON.stringify({ ...body, roomId: id }));
+          if (res.status !== 409) return json(await res.json(), res.status, origin);
+        }
+        return json({ error: 'Could not create a room — try again.' }, 503, origin);
+      }
+      if (!roomId || !ROOM_ID.test(roomId) || !action || !ROOM_ACTIONS.includes(action)) return json({ error: 'Not found.' }, 404, origin);
+      const isGet = action === 'state';
+      if (isGet !== (req.method === 'GET')) return json({ error: 'Wrong method.' }, 405, origin);
+      const res = await forward(roomId, action, isGet ? undefined : await req.text());
+      let text = await res.text();
+      if (action === 'state' && res.ok) text = refreshPhotoPasses(text, await makePhotoPass(env.GOOGLE_MAPS_API_KEY, Math.floor(Date.now() / 1000)));
+      return new Response(text, {
+        status: res.status,
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': origin, Vary: 'Origin' },
+      });
+    }
 
     if (url.pathname === '/search' && req.method === 'POST') {
       // Rate limit first so wrong codes can't be brute-forced.

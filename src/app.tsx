@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { ArtDefs } from './components/FoodArt';
 import { GroupSheet, HistorySheet, SettingsSheet, type SheetProps } from './components/Sheets';
 import { CardFace, SwipeCard, type SwipeDir } from './components/SwipeCard';
+import { JoinScreen, RoomScreen } from './components/RoomScreen';
 import { Button, Icon, PillSelect, Sheet } from './components/ui';
 import { DIETS, dietQuery } from './lib/diet';
 import { AccessCodeError, currentSource, findRestaurants, geocode, getLocation, PROXY_URL, setAccessCode, type LatLng } from './lib/places';
 import { buildDeck, effectiveConstraints, type Card } from './lib/rank';
 import { play } from './lib/sound';
 import { STORAGE_KEY, loadData, newId, saveData } from './lib/storage';
+import { createRoom, loadSession, ROOM_CODE, roomFromHash, saveSession, type Session } from './lib/room';
 import type { AppData, Distance, Restaurant } from './lib/types';
 
 const TOAST_MS = 2600;
@@ -47,6 +49,8 @@ export function App() {
   const [error, setError] = useState('');
   const [area, setArea] = useState('');
   const [sheet, setSheet] = useState<'group' | 'history' | 'settings' | null>(null);
+  const [session, setSession] = useState<Session | null>(loadSession);
+  const [joinId, setJoinId] = useState<string | null>(roomFromHash);
   const [toastMsg, setToastMsg] = useState<{ text: string; id: number } | null>(null);
   const [confirmState, setConfirmState] = useState<(ConfirmOptions & { resolve: (ok: boolean) => void }) | null>(null);
   const [storageOk, setStorageOk] = useState(true);
@@ -157,6 +161,41 @@ export function App() {
     if ((was === 'group' || was === 'settings') && center && phase === 'deck') search(center);
   };
 
+  // Invite links (#join=XXXXXX) open the join screen, even if the app is already open.
+  useEffect(() => {
+    const onHash = () => setJoinId(roomFromHash());
+    addEventListener('hashchange', onHash);
+    return () => removeEventListener('hashchange', onHash);
+  }, []);
+  const clearJoin = () => {
+    setJoinId(null);
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  };
+
+  /** Start a shared session with the best ~20 places near you. */
+  const startTogether = async (name: string) => {
+    setSheet(null);
+    try {
+      let at = center;
+      if (!at) {
+        setPhase('locating');
+        at = await getLocation();
+        setCenter(at);
+      }
+      setPhase('loading');
+      const found = list.length && center ? list : await findRestaurants(at, data.prefs.distance, dietQuery(diets));
+      const top = buildDeck(found, data, newId(), new Date()).cards.slice(0, 20).map((c) => c.r);
+      if (!top.length) throw new Error('No places nearby to swipe on — try a bigger distance.');
+      const s = await createRoom(top, name, data.prefs.diets);
+      saveSession(s);
+      setSession(s);
+      setPhase('start');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not start a session.');
+      setPhase('error');
+    }
+  };
+
   const card = cards[index];
   const nextCard = cards[index + 1];
 
@@ -254,6 +293,20 @@ export function App() {
         )}
 
         <main id="main">
+          {session ? (
+            <RoomScreen session={session} data={data} toast={toast} onExit={() => setSession(null)} />
+          ) : joinId ? (
+            <JoinScreen
+              roomId={joinId}
+              data={data}
+              onJoined={(s) => {
+                clearJoin();
+                setSession(s);
+              }}
+              onCancel={clearJoin}
+            />
+          ) : (
+          <>
           {phase === 'start' && (
             <section class="start">
               <h1>
@@ -404,10 +457,29 @@ export function App() {
               <p class="remaining">Saved to your picks — rate it later with 👍 or 👎.</p>
             </section>
           )}
+          </>
+          )}
         </main>
       </div>
 
-      {sheet === 'group' && <GroupSheet {...sheetProps} />}
+      {sheet === 'group' && (
+        <GroupSheet
+          {...sheetProps}
+          together={
+            PROXY_URL
+              ? {
+                  canStart: currentSource() === 'google',
+                  start: startTogether,
+                  join: (code) => {
+                    if (!ROOM_CODE.test(code)) return toast('Session codes are 6 letters/numbers, like K7XQ2M');
+                    setSheet(null);
+                    setJoinId(code);
+                  },
+                }
+              : undefined
+          }
+        />
+      )}
       {sheet === 'history' && <HistorySheet {...sheetProps} />}
       {sheet === 'settings' && <SettingsSheet {...sheetProps} />}
 

@@ -1544,6 +1544,130 @@ main {
   -webkit-line-clamp: unset;
 }
 
+/* Swipe together */
+.room {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.room-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 10px;
+}
+.room-who {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.88rem;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.room-bar .pill {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 0.8rem;
+}
+.room-code {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+}
+.requests {
+  flex: none;
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.requests li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--radius-sm);
+  background: #fdf0cf;
+  border: 1.5px dashed var(--mustard-deep);
+  animation: pop-in 0.3s var(--ease-pop);
+}
+.requests li > span {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9rem;
+}
+.results {
+  display: grid;
+  gap: 12px;
+  padding: 8px 0 20px;
+}
+.pick-thumb {
+  width: 48px;
+  height: 48px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 10px;
+  background: var(--paper-deep);
+}
+.tally {
+  flex: none;
+  min-width: 42px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--paper-deep);
+  text-align: center;
+  font-weight: 800;
+  font-size: 0.85rem;
+}
+.tally.is-all {
+  background: var(--tomato);
+  color: #fff8ee;
+}
+.room-join .join-form {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 420px);
+  text-align: left;
+}
+.text-input {
+  min-height: 48px;
+  padding: 0 14px;
+  font-size: 16px;
+  background: #fffdf8;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 12px;
+}
+.field-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.together {
+  border: 2px solid var(--tomato);
+  background: #fff6ee;
+}
+.waiting-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--tomato);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { transform: scale(0.8); opacity: 0.6; }
+  50% { transform: scale(1.2); opacity: 1; }
+}
+@keyframes pop-in {
+  from { transform: scale(0.9); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

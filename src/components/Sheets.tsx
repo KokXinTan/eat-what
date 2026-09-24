@@ -5,6 +5,7 @@ import { priceLabel } from '../lib/rank';
 import { freshData, makeBackup, newId, parseBackup } from '../lib/storage';
 import type { AppData, Budget, DietId, Person } from '../lib/types';
 import { FoodArt } from './FoodArt';
+import { savedName, saveName } from './RoomScreen';
 import { Button, Chip, ChoiceChips, Icon, Sheet } from './ui';
 
 export interface SheetProps {
@@ -36,7 +37,7 @@ function DietChips({ value, onChange }: { value: DietId[]; onChange: (v: DietId[
 
 // ---------- Group ----------
 
-export function GroupSheet({ data, update, onClose }: SheetProps) {
+export function GroupSheet({ data, update, onClose, together }: SheetProps & { together?: { canStart: boolean; start: (name: string) => void; join: (code: string) => void } }) {
   const setGroup = (group: Person[]) => update((d) => ({ ...d, group }));
   const patch = (id: string, change: Partial<Person>) => setGroup(data.group.map((p) => (p.id === id ? { ...p, ...change } : p)));
   const add = () => setGroup([...data.group, { id: newId(), name: '', diets: [], budget: null }]);
@@ -58,6 +59,8 @@ export function GroupSheet({ data, update, onClose }: SheetProps) {
         </>
       }
     >
+      {together && <TogetherPanel {...together} />}
+      <h3 class="section-title">Or choose on this phone</h3>
       <p class="muted small">Add everyone at the table. I'll skip places that clash with anyone's diet and stick to the tightest budget. Names are optional.</p>
       <ol class="people">
         <li class="person person-me">
@@ -320,6 +323,55 @@ function AccessPanel({ toast }: { toast: (m: string) => void }) {
           </div>
         </form>
       )}
+    </section>
+  );
+}
+
+/** Start a shared session (needs an access code) or join one by its 6-letter code. */
+function TogetherPanel({ canStart, start, join }: { canStart: boolean; start: (name: string) => void; join: (code: string) => void }) {
+  const [name, setName] = useState(savedName());
+  const [code, setCode] = useState('');
+  return (
+    <section class="panel together">
+      <h3 class="section-title">Swipe together, each on your own phone</h3>
+      <p class="muted small">Everyone swipes the same places near you. When you all swipe right on one — it's a match.</p>
+      {canStart ? (
+        <form
+          class="where"
+          onSubmit={(e) => {
+            e.preventDefault();
+            saveName(name);
+            start(name);
+          }}
+        >
+          <input aria-label="Your name" placeholder="Your name" maxLength={24} value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
+          <Button variant="primary" type="submit" icon="people">
+            Start
+          </Button>
+        </form>
+      ) : (
+        <p class="small">Starting a session needs an access code (Settings). Anyone can join one.</p>
+      )}
+      <form
+        class="where"
+        onSubmit={(e) => {
+          e.preventDefault();
+          join(code.trim().toUpperCase());
+        }}
+      >
+        <input
+          aria-label="Session code"
+          placeholder="Got a code? e.g. K7XQ2M"
+          maxLength={6}
+          value={code}
+          autoCapitalize="characters"
+          autoComplete="off"
+          onInput={(e) => setCode((e.target as HTMLInputElement).value)}
+        />
+        <Button type="submit" disabled={code.trim().length !== 6}>
+          Join
+        </Button>
+      </form>
     </section>
   );
 }

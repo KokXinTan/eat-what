@@ -1,7 +1,35 @@
 import { describe, expect, it } from 'vitest';
+import { Room } from './room';
 import worker, { allowedOrigin, checkPhotoPass, googleSearchBody, makePhotoPass, parsePhoto, parseSearch, validCode, type Env } from './index';
 
 const SITE = 'https://kokxintan.github.io';
+
+/** In-memory stand-in for the Durable Object namespace. */
+function fakeRooms() {
+  const rooms = new Map<string, Room>();
+  return {
+    idFromName: (name: string) => name,
+    get: (id: unknown) => {
+      const key = String(id);
+      if (!rooms.has(key)) {
+        const data = new Map<string, unknown>();
+        rooms.set(
+          key,
+          new Room({
+            storage: {
+              get: async <T,>(k: string) => data.get(k) as T | undefined,
+              put: async (k: string, v: unknown) => void data.set(k, structuredClone(v)),
+              deleteAll: async () => data.clear(),
+              setAlarm: async () => {},
+            },
+          }),
+        );
+      }
+      const room = rooms.get(key)!;
+      return { fetch: (r: Request) => room.fetch(r) };
+    },
+  };
+}
 
 function env(): Env {
   return {
@@ -10,6 +38,8 @@ function env(): Env {
     ALLOWED_ORIGINS: `${SITE},http://localhost:5173`,
     SEARCH_LIMITER: { limit: async () => ({ success: true }) },
     PHOTO_LIMITER: { limit: async () => ({ success: true }) },
+    ROOM_LIMITER: { limit: async () => ({ success: true }) },
+    ROOMS: fakeRooms(),
   };
 }
 
@@ -56,7 +86,9 @@ describe('who may use the proxy', () => {
     const now = 1_800_000_000;
     const pass = await makePhotoPass('secret', now);
     expect(await checkPhotoPass('secret', pass, now + 60)).toBe(true);
-    expect(await checkPhotoPass('secret', pass, now + 4000)).toBe(false); // expired
+    expect(await checkPhotoPass('secret', pass, now + 3 * 3600)).toBe(false); // expired
+    // Stable within the hour, so photo URLs don't change between room refreshes.
+    expect(await makePhotoPass('secret', now + 5)).toBe(pass);
     expect(await checkPhotoPass('other-secret', pass, now)).toBe(false);
     const [exp, sig] = pass.split('.');
     expect(await checkPhotoPass('secret', `${Number(exp) + 9999}.${sig}`, now)).toBe(false); // tampered expiry
@@ -109,5 +141,53 @@ describe('response slimming', () => {
     expect(s.addressComponents).toHaveLength(1);
     expect(s.regularOpeningHours).toEqual({ periods: [{ open: { day: 1, hour: 9, minute: 0 } }] });
     expect(s.displayName).toEqual({ text: 'Shop' });
+  });
+});
+
+describe('swipe together over HTTP', () => {
+  const post = (e: Env, path: string, body: unknown, headers: Record<string, string> = {}) =>
+    worker.fetch(new Request(`https://w${path}`, { method: 'POST', headers: { Origin: SITE, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }), e);
+  const get = (e: Env, path: string) => worker.fetch(new Request(`https://w${path}`, { headers: { Origin: SITE } }), e);
+  const LIST = [{ id: 'g:a', name: 'A', photos: [{ url: 'https://proxy/photo?name=places%2Fa%2Fphotos%2Fp&w=900&pass=OLD.sig' }] }, { id: 'g:b', name: 'B' }];
+
+  it('needs an access code to start a session', async () => {
+    const e = env();
+    expect((await post(e, '/rooms', { list: LIST })).status).toBe(401);
+    const res = await post(e, '/rooms', { name: 'Kok', list: LIST }, { 'X-Access-Code': 'me-x7k2' });
+    expect(res.status).toBe(200);
+    const { roomId, token } = (await res.json()) as { roomId: string; token: string };
+    expect(roomId).toMatch(/^[A-Z2-9]{6}$/);
+    expect(token).toBeTruthy();
+  });
+
+  it('code holders join instantly; others wait — and cannot fake approval', async () => {
+    const e = env();
+    const { roomId, token: host } = (await (await post(e, '/rooms', { name: 'Kok', list: LIST }, { 'X-Access-Code': 'me-x7k2' })).json()) as { roomId: string; token: string };
+    const aina = (await (await post(e, `/rooms/${roomId}/join`, { name: 'Aina' }, { 'X-Access-Code': 'aina-p9q3' })).json()) as { status: string; token: string };
+    expect(aina.status).toBe('approved');
+    const sneaky = (await (await post(e, `/rooms/${roomId}/join`, { name: 'Ben' }, { 'X-Room-Code-Valid': '1' })).json()) as { status: string; token: string };
+    expect(sneaky.status).toBe('pending');
+    const benView = (await (await get(e, `/rooms/${roomId}/state?token=${sneaky.token}`)).json()) as Record<string, unknown>;
+    expect(benView.list).toBeUndefined();
+    const hostView = (await (await get(e, `/rooms/${roomId}/state?token=${host}`)).json()) as { members: { id: string; name: string; status: string }[] };
+    const ben = hostView.members.find((m) => m.name === 'Ben')!;
+    expect(ben.status).toBe('pending');
+    expect((await post(e, `/rooms/${roomId}/decide`, { token: host, memberId: ben.id, approve: true })).status).toBe(200);
+    const after = (await (await get(e, `/rooms/${roomId}/state?token=${sneaky.token}`)).json()) as { status: string };
+    expect(after.status).toBe('approved');
+  });
+
+  it('refreshes photo passes when serving the room', async () => {
+    const e = env();
+    const { roomId, token } = (await (await post(e, '/rooms', { list: LIST }, { 'X-Access-Code': 'me-x7k2' })).json()) as { roomId: string; token: string };
+    const view = await (await get(e, `/rooms/${roomId}/state?token=${token}`)).text();
+    expect(view).not.toContain('pass=OLD.sig');
+    expect(view).toMatch(/pass=\d+\.[A-Za-z0-9_-]+/);
+  });
+
+  it('404s unknown rooms and bad paths', async () => {
+    const e = env();
+    expect((await get(e, '/rooms/ZZZZZZ/state?token=x')).status).toBe(404);
+    expect((await get(e, '/rooms/lower1/state?token=x')).status).toBe(404);
   });
 });
