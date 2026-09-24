@@ -366,7 +366,15 @@ async function searchGoogle(center: LatLng, radius: number, textQuery: string | 
 const CACHE_MS = 30 * 60_000;
 const CACHE_PREFIX = 'eat-what:places:';
 
+// Google's terms restrict storing Places content, so Google results stay in memory for this
+// page only; free OSM results may use sessionStorage (kinder to the shared Overpass server).
+const memory = new Map<string, { at: number; list: Restaurant[] }>();
+
 function readCache(key: string): Restaurant[] | null {
+  if (SOURCE === 'google') {
+    const hit = memory.get(key);
+    return hit && Date.now() - hit.at < CACHE_MS ? hit.list : null;
+  }
   try {
     const hit = JSON.parse(sessionStorage.getItem(CACHE_PREFIX + key) ?? 'null') as { at: number; list: Restaurant[] } | null;
     return hit && Date.now() - hit.at < CACHE_MS ? hit.list : null;
@@ -376,6 +384,10 @@ function readCache(key: string): Restaurant[] | null {
 }
 
 function writeCache(key: string, list: Restaurant[]) {
+  if (SOURCE === 'google') {
+    memory.set(key, { at: Date.now(), list });
+    return;
+  }
   try {
     sessionStorage.setItem(CACHE_PREFIX + key, JSON.stringify({ at: Date.now(), list }));
   } catch {
@@ -383,7 +395,7 @@ function writeCache(key: string, list: Restaurant[]) {
   }
 }
 
-/** Searches once per ~100 m area, radius and diet for 30 minutes (fewer API calls, kinder to free servers). */
+/** Reuses a search for the same ~100 m area, radius and diet for up to 30 minutes. */
 export async function findRestaurants(center: LatLng, distance: Distance, textQuery: string | null): Promise<Restaurant[]> {
   const radius = RADIUS_M[distance];
   // OSM ignores the diet words, so they only split the cache for Google.

@@ -34,12 +34,16 @@ Free OpenStreetMap works out of the box. For Google's richer data:
 2. Create an API key and restrict it:
    - Application restriction → Websites: `http://localhost:5173/*`, `https://<user>.github.io/*`
    - API restriction → only the two APIs above
-   - Quotas → set a daily cap (e.g. 50 requests/day) so it can't run up a bill
+   - Quotas → set daily caps (e.g. ~30 searches and ~30 photos per day) — your real protection
 3. Copy `.env.example` to `.env.local` and set `VITE_GOOGLE_MAPS_API_KEY=...`, then restart `npm run dev`.
 
-The key is visible in the built site (that's normal for browser Maps keys) — the website
-restriction is what protects it. Results are cached per area for 30 minutes, and photos only
-load for the card on screen, to keep usage low.
+The key is visible in the built site — that's normal for browser Maps keys. Google notes the
+website restriction can be bypassed, so the **daily quota caps are your real protection**.
+Requesting ratings, prices and reviews bills searches at the Enterprise tier (1,000 free/month
+at the time of writing), and photos have their own 1,000/month allowance — caps of ~30
+searches/day and ~30 photos/day keep a shared app inside the free tier. Google results are kept
+in memory only (Google's terms restrict storing Places content); photos load only for the card
+on screen and the one behind it.
 
 ## Deploy to GitHub Pages
 
