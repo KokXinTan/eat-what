@@ -377,12 +377,7 @@ export function App() {
           {phase === 'deck' && card && (
             <section class="deck-area">
               <div class="stack">
-                {nextCard && (
-                  <article class="card is-next" aria-hidden="true">
-                    <CardFace card={nextCard} diets={diets} />
-                  </article>
-                )}
-                <SwipeCard key={card.r.id} card={card} diets={diets} onSwipe={swipe} />
+                {[nextCard, card].map((c) => c && <SwipeCard key={c.r.id} card={c} diets={diets} onSwipe={swipe} top={c === card} />)}
                 {showHint && (
                   <p class="swipe-hint" aria-hidden="true">
                     <span>← not today</span>

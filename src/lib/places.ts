@@ -199,7 +199,7 @@ const PRICE: Record<string, PriceLevel> = {
   PRICE_LEVEL_EXPENSIVE: 3,
   PRICE_LEVEL_VERY_EXPENSIVE: 4,
 };
-const PHOTO_MAX_PX = 900;
+const PHOTO_MAX_PX = 640;
 const MAX_PHOTOS = 5;
 const REVIEW_MAX_CHARS = 150;
 const AREA_TYPES = ['neighborhood', 'sublocality_level_1', 'sublocality', 'locality'];

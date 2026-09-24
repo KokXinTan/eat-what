@@ -1,4 +1,5 @@
 import type { JSX } from 'preact';
+import { renderToString } from 'preact-render-to-string';
 import type { ArtKind } from '../lib/types';
 
 // Original "grainy gouache" food illustrations, drawn as SVG and passed through
@@ -535,20 +536,41 @@ interface FoodArtProps {
   label?: string;
 }
 
+const ART_PX = 400;
+const artCache = new Map<string, string>();
+
+/**
+ * The illustration as a cached image URL. Rendering the paint-texture filter live is expensive
+ * (phones re-ran it on every new card), so each kind is drawn once into an <img>: the browser
+ * rasterises it once and moving it around is then essentially free.
+ */
+export function artUrl(kind: ArtKind, variant?: string): string {
+  const key = `${kind}:${variant ?? ''}`;
+  let url = artCache.get(key);
+  if (!url) {
+    const draw = ART[kind] ?? ART.riceBowl;
+    const body = renderToString(<g filter="url(#ew-gouache)">{draw(variant)}</g>);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="${ART_PX}" height="${ART_PX}">${DEFS_MARKUP}${body}</svg>`;
+    url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    artCache.set(key, url);
+  }
+  return url;
+}
+
 export function FoodArt({ kind, variant, size = '100%', class: className, label }: FoodArtProps) {
-  const draw = ART[kind] ?? ART.riceBowl;
+  const fixed = typeof size === 'number';
   return (
-    <svg
-      viewBox="0 0 200 200"
-      width={size}
-      height={size}
-      class={className}
-      role={label ? 'img' : undefined}
-      aria-label={label}
+    <img
+      src={artUrl(kind, variant)}
+      class={`art ${className ?? ''}`}
+      width={fixed ? size : undefined}
+      height={fixed ? size : undefined}
+      style={fixed ? undefined : { width: size, height: 'auto' }}
+      alt={label ?? ''}
       aria-hidden={label ? undefined : 'true'}
-    >
-      <g filter="url(#ew-gouache)">{draw(variant)}</g>
-    </svg>
+      draggable={false}
+      decoding="async"
+    />
   );
 }
 
@@ -556,6 +578,13 @@ export function FoodArt({ kind, variant, size = '100%', class: className, label 
 export function ArtDefs() {
   return (
     <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true" focusable="false">
+      <Defs />
+    </svg>
+  );
+}
+
+function Defs() {
+  return (
       <defs>
         <clipPath id="ew-bowl" clipPathUnits="userSpaceOnUse">
           <ellipse cx="100" cy="100" rx="55" ry="15" />
@@ -590,6 +619,7 @@ export function ArtDefs() {
           <feDisplacementMap in="SourceGraphic" in2="warp" scale="6" xChannelSelector="R" yChannelSelector="G" />
         </filter>
       </defs>
-    </svg>
   );
 }
+
+const DEFS_MARKUP = renderToString(<Defs />);

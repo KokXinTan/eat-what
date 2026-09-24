@@ -284,12 +284,7 @@ export function RoomScreen({ session, data, toast, onExit }: Props) {
       ) : (
         <section class="deck-area">
           <div class="stack">
-            {nextCard && (
-              <article class="card is-next" aria-hidden="true">
-                <CardFace card={nextCard} diets={diets} />
-              </article>
-            )}
-            <SwipeCard key={card.r.id} card={card} diets={diets} onSwipe={swipe} />
+            {[nextCard, card].map((c) => c && <SwipeCard key={c.r.id} card={c} diets={diets} onSwipe={swipe} top={c === card} />)}
           </div>
           <div class="swipe-buttons">
             <button type="button" class="round round-no" aria-label="Not for me" onClick={() => swipe('left')}>

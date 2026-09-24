@@ -243,7 +243,7 @@ export function CardDetails({ card, diets }: { card: Card; diets: DietId[] }) {
 }
 
 /** The top card of the deck: drag it left (skip) or right (let's go). */
-export function SwipeCard({ card, diets, onSwipe }: { card: Card; diets: DietId[]; onSwipe: (dir: SwipeDir) => void }) {
+export function SwipeCard({ card, diets, onSwipe, top = true }: { card: Card; diets: DietId[]; onSwipe: (dir: SwipeDir) => void; top?: boolean }) {
   // Dragging never re-renders: the card and its labels are moved straight on the DOM, once per
   // animation frame. Re-rendering the photos/illustration on every touch move made phones lag.
   const el = useRef<HTMLElement>(null);
@@ -280,7 +280,7 @@ export function SwipeCard({ card, diets, onSwipe }: { card: Card; diets: DietId[
   };
 
   const onDown = (e: PointerEvent) => {
-    if (flying || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    if (!top || flying || (e.pointerType === 'mouse' && e.button !== 0)) return;
     start.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
     lastMove.current = { x: e.clientX, t: e.timeStamp, speed: 0 };
   };
@@ -324,10 +324,13 @@ export function SwipeCard({ card, diets, onSwipe }: { card: Card; diets: DietId[
   // The card face only re-renders when the card itself changes, never during a drag.
   const face = useMemo(() => <CardFace card={card} diets={diets} />, [card.r.id, diets.join()]);
 
+  // The card behind stays mounted and simply becomes the top card, sliding forward instead of
+  // being rebuilt (which used to redraw its photos and art mid-animation).
   return (
     <article
       ref={el}
-      class={`card is-top ${fresh ? 'is-resting' : ''}`}
+      class={`card ${top ? `is-top ${fresh ? 'is-resting' : ''}` : 'is-next'}`}
+      aria-hidden={top ? undefined : 'true'}
       onPointerDown={onDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
