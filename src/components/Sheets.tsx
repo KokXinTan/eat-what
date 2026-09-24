@@ -1,6 +1,6 @@
-import { useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { DIETS, DIET_IDS } from '../lib/diet';
-import { currentSource, getAccessCode, PROXY_URL, setAccessCode } from '../lib/places';
+import { checkAccessCode, currentSource, getAccessCode, PROXY_URL, setAccessCode } from '../lib/places';
 import { priceLabel } from '../lib/rank';
 import { freshData, makeBackup, newId, parseBackup } from '../lib/storage';
 import type { AppData, Budget, DietId, Person } from '../lib/types';
@@ -281,6 +281,18 @@ export function SettingsSheet({ data, update, toast, confirm, onClose }: SheetPr
 function AccessPanel({ toast }: { toast: (m: string) => void }) {
   const [saved, setSaved] = useState(getAccessCode());
   const [draft, setDraft] = useState('');
+  const [checking, setChecking] = useState(false);
+  const [problem, setProblem] = useState('');
+  // A code saved earlier may since have been revoked: re-check it when Settings opens.
+  useEffect(() => {
+    if (!saved) return;
+    checkAccessCode(saved).then((r) => {
+      if (r !== 'invalid') return;
+      setAccessCode('');
+      setSaved('');
+      setProblem('Your saved code no longer works — enter a new one.');
+    });
+  }, []);
   return (
     <section class="panel">
       <h3 class="section-title">Google Maps access</h3>
@@ -305,22 +317,42 @@ function AccessPanel({ toast }: { toast: (m: string) => void }) {
       ) : (
         <form
           class="code-form"
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
-            if (!draft.trim()) return;
+            if (!draft.trim() || checking) return;
+            setChecking(true);
+            setProblem('');
+            // Only say "Unlocked" once the Worker has confirmed the code.
+            const result = await checkAccessCode(draft);
+            setChecking(false);
+            if (result !== 'ok') {
+              setProblem(
+                result === 'invalid'
+                  ? "That code isn't recognised. Check it with whoever gave it to you."
+                  : result === 'busy'
+                    ? 'Too many tries — wait a minute and try again.'
+                    : "Couldn't reach the server — check your connection.",
+              );
+              return;
+            }
             setAccessCode(draft);
             setSaved(draft.trim());
             setDraft('');
-            toast('Code saved — close settings to search with Google');
+            toast('Unlocked — close settings to search with Google');
           }}
         >
           <p class="muted small">Got a code from the person who runs this app? Enter it for Google photos, ratings, prices and opening hours.</p>
           <div class="where">
             <input aria-label="Access code" placeholder="Access code" value={draft} maxLength={64} autoComplete="off" onInput={(e) => setDraft((e.target as HTMLInputElement).value)} />
-            <Button variant="primary" type="submit">
-              Unlock
+            <Button variant="primary" type="submit" disabled={checking}>
+              {checking ? 'Checking…' : 'Unlock'}
             </Button>
           </div>
+          {problem && (
+            <p class="field-error" role="alert">
+              {problem}
+            </p>
+          )}
         </form>
       )}
     </section>

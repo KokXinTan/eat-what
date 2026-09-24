@@ -288,6 +288,13 @@ export default {
       });
     }
 
+    // Lets the app confirm a code before saying "Unlocked". Never calls Google; rate-limited
+    // with searches so codes can't be guessed.
+    if (url.pathname === '/check' && req.method === 'POST') {
+      if (!(await env.SEARCH_LIMITER.limit({ key: ip })).success) return json({ error: 'Too many tries — wait a minute.' }, 429, origin);
+      return validCode(req.headers.get(CODE_HEADER), env.ACCESS_CODES) ? json({ ok: true }, 200, origin) : json({ error: 'Access code not recognised.' }, 401, origin);
+    }
+
     if (url.pathname === '/search' && req.method === 'POST') {
       // Rate limit first so wrong codes can't be brute-forced.
       if (!(await env.SEARCH_LIMITER.limit({ key: ip })).success) return json({ error: 'Too many searches — wait a minute.' }, 429, origin);

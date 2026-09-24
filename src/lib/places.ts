@@ -29,21 +29,34 @@ export function setAccessCode(code: string) {
 }
 
 /**
- * A personal setup link (…/eat-what/#code=YOUR-CODE) saves the code on this phone, then removes
- * it from the address bar. Returns true if a code was saved.
+ * A personal setup link (…/eat-what/#code=YOUR-CODE) checks the code with the Worker and, if
+ * valid, saves it on this phone. The code is removed from the address bar either way.
  */
-export function takeCodeFromLink(): boolean {
+export async function takeCodeFromLink(): Promise<'ok' | 'invalid' | 'busy' | 'offline' | null> {
   const m = location.hash.match(/(?:^#|&)code=([A-Za-z0-9_-]{3,64})/);
-  if (!m) return false;
-  setAccessCode(m[1]);
+  if (!m) return null;
+  // Remove the code from the address bar straight away, whatever the result.
   const rest = location.hash.replace(/(?:^#|&)code=[A-Za-z0-9_-]+/, '').replace(/^&/, '');
   history.replaceState(null, '', location.pathname + location.search + (rest ? `#${rest}` : ''));
-  return true;
+  const result = await checkAccessCode(m[1]);
+  if (result === 'ok') setAccessCode(m[1]);
+  return result;
 }
 
 /** Google when a Worker is configured and this browser has an access code. */
 export function currentSource(): 'google' | 'osm' {
   return PROXY_URL && getAccessCode() ? 'google' : 'osm';
+}
+
+/** Asks the Worker whether a code is valid (no Google call). */
+export async function checkAccessCode(code: string): Promise<'ok' | 'invalid' | 'busy' | 'offline'> {
+  if (!PROXY_URL) return 'offline';
+  try {
+    const res = await fetch(`${PROXY_URL}/check`, { method: 'POST', headers: { 'X-Access-Code': code.trim() } });
+    return res.ok ? 'ok' : res.status === 429 ? 'busy' : 'invalid';
+  } catch {
+    return 'offline';
+  }
 }
 
 /** Thrown when the Worker rejects the access code. */

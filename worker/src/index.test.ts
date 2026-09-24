@@ -191,3 +191,18 @@ describe('swipe together over HTTP', () => {
     expect((await get(e, '/rooms/lower1/state?token=x')).status).toBe(404);
   });
 });
+
+describe('code check', () => {
+  const check = (e: Env, code?: string) =>
+    worker.fetch(new Request('https://w/check', { method: 'POST', headers: { Origin: SITE, ...(code ? { 'X-Access-Code': code } : {}) } }), e);
+  it('confirms valid codes and rejects others', async () => {
+    expect((await check(env(), 'aina-p9q3')).status).toBe(200);
+    expect((await check(env(), 'random-guess')).status).toBe(401);
+    expect((await check(env())).status).toBe(401);
+    expect((await check({ ...env(), ACCESS_CODES: '' }, 'anything')).status).toBe(401);
+  });
+  it('is rate-limited', async () => {
+    const e = { ...env(), SEARCH_LIMITER: { limit: async () => ({ success: false }) } };
+    expect((await check(e, 'aina-p9q3')).status).toBe(429);
+  });
+});

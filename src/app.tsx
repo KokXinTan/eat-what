@@ -66,7 +66,11 @@ export function App() {
   useEffect(() => setStorageOk(saveData(data)), [data]);
   // A personal setup link (#code=…) unlocks Google data on this phone in one tap.
   useEffect(() => {
-    if (takeCodeFromLink()) toast('Access code saved on this phone — Google photos & ratings unlocked');
+    takeCodeFromLink().then((r) => {
+      if (r === 'ok') toast('Access code saved — Google photos & ratings unlocked');
+      else if (r === 'invalid') toast("That link's access code isn't valid");
+      else if (r) toast("Couldn't check the access code — try the link again");
+    });
   }, []);
 
   // Another tab saved newer data: pick it up instead of overwriting it later.
