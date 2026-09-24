@@ -196,7 +196,7 @@ export function CardFace({ card, diets, stamp }: { card: Card; diets: DietId[]; 
 }
 
 /** The expanded part: description, everything they offer, reasons, review, diet notes, source. */
-export function CardDetails({ card, diets }: { card: Card; diets: DietId[] }) {
+export function CardDetails({ card, diets, mapsLink = true }: { card: Card; diets: DietId[]; mapsLink?: boolean }) {
   const r = card.r;
   const description = r.id.startsWith('g:') ? r.summary : '';
   const chips = [...new Set([...r.serves, ...r.features])];
@@ -233,10 +233,12 @@ export function CardDetails({ card, diets }: { card: Card; diets: DietId[] }) {
           </span>
         </p>
       )}
-      <a class="btn btn-ghost btn-sm" href={r.mapsUrl} target="_blank" rel="noopener noreferrer">
-        <Icon name="map" size={16} />
-        <span>Open in Google Maps</span>
-      </a>
+      {mapsLink && (
+        <a class="btn btn-ghost btn-sm" href={r.mapsUrl} target="_blank" rel="noopener noreferrer">
+          <Icon name="map" size={16} />
+          <span>Open in Google Maps</span>
+        </a>
+      )}
       <p class="fine">{r.id.startsWith('g:') ? 'Details from Google Maps.' : 'Map data © OpenStreetMap contributors. Reviews, hours and prices are on Google Maps.'}</p>
     </div>
   );

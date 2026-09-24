@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { ArtDefs } from './components/FoodArt';
 import { GroupSheet, HistorySheet, SettingsSheet, type SheetProps } from './components/Sheets';
 import { CardFace, SwipeCard, type SwipeDir } from './components/SwipeCard';
+import { ExploreGrid, resetExplore } from './components/ExploreGrid';
 import { JoinScreen, RoomScreen } from './components/RoomScreen';
 import { Button, Icon, PillSelect, Sheet } from './components/ui';
 import { DIETS, dietQuery } from './lib/diet';
@@ -19,6 +20,7 @@ const ROLL_MS = 900;
 const LUCKY_POOL = 6;
 const MAX_SKIPS = 300;
 const HINT_KEY = 'eat-what:swipe-hint-seen';
+const VIEW_KEY = 'eat-what:view';
 
 const DISTANCES: { value: Distance; label: string; short: string }[] = [
   { value: 'walk', label: 'Walk · within 800 m', short: 'Walk' },
@@ -58,6 +60,22 @@ export function App() {
   const [exhausted, setExhausted] = useState(false);
   const [emptyPages, setEmptyPages] = useState(0);
   const [pendingLucky, setPendingLucky] = useState(false);
+  // Swipe one at a time, or Explore everything nearby as a grid. Remembered on this phone.
+  const [view, setViewState] = useState<'swipe' | 'explore'>(() => {
+    try {
+      return localStorage.getItem(VIEW_KEY) === 'explore' ? 'explore' : 'swipe';
+    } catch {
+      return 'swipe';
+    }
+  });
+  const setView = (v: 'swipe' | 'explore') => {
+    setViewState(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* convenience only */
+    }
+  };
   const [removed, setRemoved] = useState<string[]>([]);
   const [index, setIndex] = useState(0);
   /** The diet/budget/group the current deck was ranked for. */
@@ -130,6 +148,7 @@ export function App() {
       deal(found, d);
       setPage(0);
       setEmptyPages(0);
+      resetExplore();
       setExhausted(!hasMorePages(0));
       setPhase('deck');
       if (found.length) play(d.prefs.sound, 'reveal');
@@ -210,7 +229,8 @@ export function App() {
   };
 
   useEffect(() => {
-    if (phase !== 'deck' || loadingMore || exhausted || !center) return;
+    // In Explore, scrolling to the end loads more instead.
+    if (phase !== 'deck' || view !== 'swipe' || loadingMore || exhausted || !center) return;
     if (cards.length - index <= LOAD_AHEAD) loadMore();
   }, [phase, index, cards.length, loadingMore, exhausted]);
 
@@ -331,11 +351,12 @@ export function App() {
 
   /** Back to the deck after a pick, continuing with the next place. */
   const continueDeck = () => {
+    const fromDeck = view === 'swipe' && chosen && cards[index]?.r.id === chosen.card.r.id;
     setChosen(null);
     setPhase('deck');
     // Group or diet edited meanwhile: re-rank so clashing places drop out.
     if (JSON.stringify(effectiveConstraints(data)) !== dealtFor) deal(list);
-    else setIndex((i) => i + 1);
+    else if (fromDeck) setIndex((i) => i + 1);
   };
 
   // "Not this one": undo the pick. It counts as a skip, so ↺ can bring the place back.
@@ -359,7 +380,7 @@ export function App() {
   };
 
   useEffect(() => {
-    if (phase !== 'deck' || sheet || confirmState) return;
+    if (phase !== 'deck' || view !== 'swipe' || sheet || confirmState) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest('input, textarea, select')) return;
       if (e.key === 'ArrowLeft') swipe('left');
@@ -387,8 +408,30 @@ export function App() {
                 </g>
               </svg>
             </span>
-            Eat What?
+            <span class="logo-text">Eat What?</span>
           </button>
+          {!session && !joinId && (phase === 'deck' || phase === 'chosen' || phase === 'rolling') && (
+            <div class="view-switch" role="tablist" aria-label="View">
+              {(['swipe', 'explore'] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  role="tab"
+                  aria-selected={view === v}
+                  class={view === v ? 'is-on' : ''}
+                  onClick={() => {
+                    setView(v);
+                    if (phase === 'chosen') {
+                      setChosen(null);
+                      setPhase('deck');
+                    }
+                  }}
+                >
+                  <Icon name={v === 'swipe' ? 'cards' : 'grid'} size={16} /> {v === 'swipe' ? 'Swipe' : 'Explore'}
+                </button>
+              ))}
+            </div>
+          )}
           <nav class="top-actions" aria-label="More">
             <button type="button" class="icon-btn" aria-label={`Who's eating${people > 1 ? ` (${people} people)` : ''}`} onClick={() => setSheet('group')}>
               <Icon name="people" />
@@ -494,7 +537,19 @@ export function App() {
             </div>
           )}
 
-          {phase === 'deck' && card && (
+          {phase === 'deck' && view === 'explore' && (
+            <ExploreGrid
+              cards={cards}
+              diets={diets}
+              pickedIds={new Set(data.picks.map((p) => p.placeId))}
+              loadingMore={loadingMore}
+              canLoadMore={!exhausted && !!center}
+              onLoadMore={loadMore}
+              onChoose={(c) => choose(c)}
+            />
+          )}
+
+          {phase === 'deck' && view === 'swipe' && card && (
             <section class="deck-area">
               <div class="stack">
                 {[nextCard, card].map((c) => c && <SwipeCard key={c.r.id} card={c} diets={diets} onSwipe={swipe} top={c === card} />)}
@@ -525,8 +580,8 @@ export function App() {
             </section>
           )}
 
-          {phase === 'deck' && !card && loadingMore && <Deal label="Finding more places…" />}
-          {phase === 'deck' && !card && !loadingMore && (
+          {phase === 'deck' && view === 'swipe' && !card && loadingMore && <Deal label="Finding more places…" />}
+          {phase === 'deck' && view === 'swipe' && !card && !loadingMore && (
             <section class="start">
               <h2 class="h-sm">{cards.length ? "That's everything nearby" : 'Nothing nearby fits'}</h2>
               <p class="lede">

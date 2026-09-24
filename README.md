@@ -4,6 +4,9 @@ Can't decide where to eat? Tap **Start swiping** and go through what's good near
 **right** to go, **left** to skip. One painted card at a time, each with a short
 "why this, today".
 
+- **Swipe or Explore.** Swipe one card at a time to decide fast, or switch to **Explore**: a
+  photo grid of everything nearby with cuisine chips (with counts), sorting (best match /
+  nearest / top rated), local-gem and closed badges, and more places loading as you scroll.
 - **One screen, minimal typing.** Distance (walk / nearby / drive) and budget ($–$$$) are
   one-tap chips. Everything else is optional.
 - **Real restaurants near you.** Free [OpenStreetMap](https://www.openstreetmap.org) data for
