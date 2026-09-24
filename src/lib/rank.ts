@@ -1,4 +1,4 @@
-// Deterministic ranking of nearby restaurants into a swipe deck.
+// Deterministic ranking of nearby restaurants for the pick board.
 // Hard filters remove what clearly doesn't fit; each remaining place gets
 // scored "factors" whose top positive texts become the "why this, today".
 // A small seeded jitter keeps equal-ish places from always coming out in the

@@ -134,7 +134,7 @@ export function HistorySheet({ data, update, confirm, onClose }: SheetProps) {
           <div class="empty-art">
             <FoodArt kind="toast" size={140} />
           </div>
-          <p>Nothing yet. Swipe right on something and it'll show up here.</p>
+          <p>Nothing yet. Pick a place and it'll show up here.</p>
         </div>
       ) : (
         <>
@@ -224,7 +224,7 @@ export function SettingsSheet({ data, update, toast, confirm, onClose }: SheetPr
       <section class="panel">
         <label class="check">
           <input type="checkbox" checked={data.prefs.sound} onChange={() => setPrefs({ sound: !data.prefs.sound })} />
-          <span>Soft sounds on swipes</span>
+          <span>Soft sounds on taps</span>
         </label>
       </section>
 
@@ -365,8 +365,8 @@ function TogetherPanel({ canStart, start, join }: { canStart: boolean; start: (n
   const [code, setCode] = useState('');
   return (
     <section class="panel together">
-      <h3 class="section-title">Swipe together, each on your own phone</h3>
-      <p class="muted small">Everyone swipes the same places near you. When you all swipe right on one — it's a match.</p>
+      <h3 class="section-title">Pick together, each on your own phone</h3>
+      <p class="muted small">Everyone taps places on the same photo board and sees each other's picks live. Start a 60-second countdown and the most-wanted place wins.</p>
       {canStart ? (
         <form
           class="where"

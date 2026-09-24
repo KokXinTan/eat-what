@@ -1,12 +1,15 @@
 # Eat What?
 
-Can't decide where to eat? Tap **Start swiping** and go through what's good nearby —
-**right** to go, **left** to skip. One painted card at a time, each with a short
-"why this, today".
+Can't decide where to eat? Tap **Show me food nearby** and get a photo board of what's good
+around you. Tap every place that tempts you (tap again to un-pick), then decide in one tap — or
+let 🎲 fate pick from your shortlist.
 
-- **Swipe or Explore.** Swipe one card at a time to decide fast, or switch to **Explore**: a
-  photo grid of everything nearby with cuisine chips (with counts), sorting (best match /
-  nearest / top rated), local-gem and closed badges, and more places loading as you scroll.
+- **Photo-first board.** Big photos with name, cuisine, rating, distance and price on each tile;
+  ⓘ opens more photos, dishes and reviews. Cuisine chips (with counts), sorting (best match /
+  nearest / top rated), local-gem and closed badges, and more places — including niche ones like
+  kopitiams and hawker stalls — load as you scroll.
+- **Decision tray.** Your picks collect at the bottom: **Decide** shows your shortlist to choose
+  from, 🎲 picks one at random. **Just pick for me** on the start screen skips straight to it.
 - **One screen, minimal typing.** Distance (walk / nearby / drive) and budget ($–$$$) are
   one-tap chips. Everything else is optional.
 - **Real restaurants near you.** Free [OpenStreetMap](https://www.openstreetmap.org) data for
@@ -16,8 +19,10 @@ Can't decide where to eat? Tap **Start swiping** and go through what's good near
   prefers a change from your last pick.
 - **Dietary needs** (halal, no pork, no beef, vegetarian, vegan): clear clashes are hidden;
   anything map data can't confirm is marked **unverified**, never "safe".
-- **Swipe together:** start a session, share the link, and everyone swipes the same places on
-  their own phone. When everyone swipes right on one place — *it's a match*. People with an
+- **Pick together, live:** start a session and share the link. Everyone taps places on the same
+  board from their own phone and sees everyone else's picks as coloured initials on the photos,
+  with a live "🔥 most wanted" leaderboard. If everyone taps the same place — instant match. Or
+  the host starts a 60-second countdown: when it ends, the most-wanted place wins. People with an
   access code join instantly; anyone else waits until the host taps **Let in**. Everyone's
   diets apply to the whole group. Sessions delete themselves after 6 hours.
 - **Or choose on one phone:** add friends' diets and budgets; picks must suit everyone.
@@ -56,7 +61,7 @@ One-time setup (free Cloudflare plan is plenty):
 **Manage access:** run `npm run worker:codes` again with the new list (e.g. drop `aina-p9q3` to
 revoke Aina), or edit the `ACCESS_CODES` secret in the Cloudflare dashboard. No redeploy needed.
 
-**Swipe-together sessions** live in a Cloudflare Durable Object (free plan, SQLite-backed), one
+**Pick-together sessions** live in a Cloudflare Durable Object (free plan, SQLite-backed), one
 per room, auto-deleted after 6 hours. Only people with an access code can start one; joiners
 without a code stay "pending" (and see nothing) until the host approves them.
 
@@ -86,9 +91,11 @@ relative paths, so it works at a domain root or any sub-path.
 
 ```
 src/
-  app.tsx               single screen: start → deck → chosen, plus sheets
+  app.tsx               single screen: start → board → chosen, plus sheets
   components/
-    SwipeCard.tsx       drag/keyboard/button swiping and the card face
+    PickBoard.tsx       photo-first tap-to-pick grid (solo and group)
+    PlaceCard.tsx       card face, photo gallery and place details
+    RoomScreen.tsx      join + live group board with countdown
     Sheets.tsx          Group, History (👍/👎) and Settings (diet, backup)
     FoodArt.tsx         original gouache-style SVG food illustrations
   lib/
@@ -97,7 +104,7 @@ src/
     diet.ts             dietary rules (conflict / unverified / ok)
     storage.ts          localStorage + validated backup import
 worker/src/index.ts     Cloudflare Worker: holds the key, access codes, rate limits, routes
-worker/src/room*.ts     swipe-together rooms (Durable Object + pure rules)
+worker/src/room*.ts     pick-together rooms (Durable Object + pure rules)
 ```
 
 ## Limits

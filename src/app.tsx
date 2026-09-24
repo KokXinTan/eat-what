@@ -1,26 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { ArtDefs } from './components/FoodArt';
-import { GroupSheet, HistorySheet, SettingsSheet, type SheetProps } from './components/Sheets';
-import { CardFace, SwipeCard, type SwipeDir } from './components/SwipeCard';
-import { ExploreGrid, resetExplore } from './components/ExploreGrid';
+import { FoodArt, ArtDefs } from './components/FoodArt';
+import { Deal, Splats } from './components/Flair';
+import { CardFace } from './components/PlaceCard';
+import { facts, PickBoard, resetBoard } from './components/PickBoard';
 import { JoinScreen, RoomScreen } from './components/RoomScreen';
+import { GroupSheet, HistorySheet, SettingsSheet, type SheetProps } from './components/Sheets';
 import { Button, Icon, PillSelect, Sheet } from './components/ui';
 import { DIETS, dietQuery } from './lib/diet';
 import { AccessCodeError, currentSource, findRestaurants, geocode, getLocation, hasMorePages, PROXY_URL, setAccessCode, takeCodeFromLink, type LatLng } from './lib/places';
 import { buildDeck, effectiveConstraints, type Card } from './lib/rank';
+import { createRoom, loadSession, ROOM_CODE, roomFromHash, saveSession, type Session } from './lib/room';
 import { play } from './lib/sound';
 import { STORAGE_KEY, loadData, newId, saveData } from './lib/storage';
-import { createRoom, loadSession, ROOM_CODE, roomFromHash, saveSession, type Session } from './lib/room';
 import type { AppData, Distance, Restaurant } from './lib/types';
 
 const TOAST_MS = 2600;
-const SHUFFLE_MS = 700;
+const LOADING_MS = 700;
 const ROLL_MS = 900;
-/** Feeling lucky picks from the best few remaining places, never a poor one. */
+/** "Pick for me" with nothing tapped picks from the best few places, never a poor one. */
 const LUCKY_POOL = 6;
 const MAX_SKIPS = 300;
-const HINT_KEY = 'eat-what:swipe-hint-seen';
-const VIEW_KEY = 'eat-what:view';
+const TRAY_THUMBS = 4;
+/** Places offered to a new group session. */
+const ROOM_PLACES = 20;
 
 const DISTANCES: { value: Distance; label: string; short: string }[] = [
   { value: 'walk', label: 'Walk · within 800 m', short: 'Walk' },
@@ -37,12 +39,10 @@ const OPEN_FILTER: { value: boolean; label: string; short: string }[] = [
   { value: false, label: 'Open now', short: 'Open now' },
   { value: true, label: 'Any time (include closed places)', short: 'Any time' },
 ];
-/** Load the next page of places when this many cards are left. */
-const LOAD_AHEAD = 5;
 /** Stop digging after this many pages in a row add nothing new. */
 const EMPTY_PAGES_LIMIT = 3;
 
-type Phase = 'start' | 'locating' | 'where' | 'loading' | 'rolling' | 'deck' | 'chosen' | 'error';
+type Phase = 'start' | 'locating' | 'where' | 'loading' | 'rolling' | 'board' | 'chosen' | 'error';
 type ConfirmOptions = { title: string; body?: string; confirmLabel: string; danger?: boolean };
 
 const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -54,31 +54,17 @@ export function App() {
   const [center, setCenter] = useState<LatLng | null>(null);
   const [list, setList] = useState<Restaurant[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
-  // Paging: load a few places first, more only when the deck runs low.
+  const [removed, setRemoved] = useState<string[]>([]);
+  /** Places tapped on the board (the shortlist), in tap order. */
+  const [wanted, setWanted] = useState<string[]>([]);
+  const [shortlistOpen, setShortlistOpen] = useState(false);
+  // Paging: show a first batch, load more only when you scroll near the end.
   const [page, setPage] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [exhausted, setExhausted] = useState(false);
   const [emptyPages, setEmptyPages] = useState(0);
   const [pendingLucky, setPendingLucky] = useState(false);
-  // Swipe one at a time, or Explore everything nearby as a grid. Remembered on this phone.
-  const [view, setViewState] = useState<'swipe' | 'explore'>(() => {
-    try {
-      return localStorage.getItem(VIEW_KEY) === 'explore' ? 'explore' : 'swipe';
-    } catch {
-      return 'swipe';
-    }
-  });
-  const setView = (v: 'swipe' | 'explore') => {
-    setViewState(v);
-    try {
-      localStorage.setItem(VIEW_KEY, v);
-    } catch {
-      /* convenience only */
-    }
-  };
-  const [removed, setRemoved] = useState<string[]>([]);
-  const [index, setIndex] = useState(0);
-  /** The diet/budget/group the current deck was ranked for. */
+  /** The diet/budget/group the board was ranked for. */
   const [dealtFor, setDealtFor] = useState('');
   const [chosen, setChosen] = useState<{ card: Card; pickId: string; stamp: string } | null>(null);
   const [error, setError] = useState('');
@@ -89,13 +75,6 @@ export function App() {
   const [toastMsg, setToastMsg] = useState<{ text: string; id: number } | null>(null);
   const [confirmState, setConfirmState] = useState<(ConfirmOptions & { resolve: (ok: boolean) => void }) | null>(null);
   const [storageOk, setStorageOk] = useState(true);
-  const [showHint, setShowHint] = useState(() => {
-    try {
-      return !localStorage.getItem(HINT_KEY);
-    } catch {
-      return true;
-    }
-  });
   const toastTimer = useRef<number>();
 
   useEffect(() => setStorageOk(saveData(data)), [data]);
@@ -129,13 +108,14 @@ export function App() {
 
   const { diets, budget, people } = effectiveConstraints(data);
 
-  /** Rank a restaurant list into a fresh deck. */
+  /** Rank the places for the board. */
   const deal = (source: Restaurant[], d: AppData = data) => {
-    const deck = buildDeck(source, d, newId(), new Date());
+    const ranked = buildDeck(source, d, newId(), new Date());
     setDealtFor(JSON.stringify(effectiveConstraints(d)));
-    setCards(deck.cards);
-    setRemoved(deck.removed);
-    setIndex(0);
+    setCards(ranked.cards);
+    setRemoved(ranked.removed);
+    // Keep taps on places that are still on the board.
+    setWanted((w) => w.filter((id) => ranked.cards.some((c) => c.r.id === id)));
   };
 
   const search = async (at: LatLng, d: AppData = data) => {
@@ -143,14 +123,15 @@ export function App() {
     setError('');
     try {
       const { diets: ds } = effectiveConstraints(d);
-      const [found] = await Promise.all([findRestaurants(at, d.prefs.distance, dietQuery(ds)), sleep(SHUFFLE_MS)]);
+      const [found] = await Promise.all([findRestaurants(at, d.prefs.distance, dietQuery(ds)), sleep(LOADING_MS)]);
       setList(found);
+      setWanted([]);
       deal(found, d);
       setPage(0);
       setEmptyPages(0);
-      resetExplore();
+      resetBoard();
       setExhausted(!hasMorePages(0));
-      setPhase('deck');
+      setPhase('board');
       if (found.length) play(d.prefs.sound, 'reveal');
     } catch (e) {
       if (e instanceof AccessCodeError) {
@@ -164,7 +145,7 @@ export function App() {
     }
   };
 
-  const surprise = async () => {
+  const findFood = async () => {
     if (center) return search(center);
     setPhase('locating');
     try {
@@ -191,21 +172,32 @@ export function App() {
     search(at);
   };
 
-  // Settings that change the deck: distance needs a new search, the rest re-rank.
+  // Filters: distance needs a new search; price and opening hours just re-rank.
   const setDistance = (distance: Distance) => {
     const next = { ...data, prefs: { ...data.prefs, distance } };
     setData(next);
-    if (center && (phase === 'deck' || phase === 'chosen')) search(center, next);
+    if (center && (phase === 'board' || phase === 'chosen')) search(center, next);
+  };
+  const setBudget = (b: AppData['prefs']['budget']) => {
+    const next = { ...data, prefs: { ...data.prefs, budget: b } };
+    setData(next);
+    if (phase === 'board') deal(list, next);
   };
   const setShowClosed = (showClosed: boolean) => {
     const next = { ...data, prefs: { ...data.prefs, showClosed } };
     setData(next);
-    if (phase === 'deck') deal(list, next);
+    if (phase === 'board') deal(list, next);
+  };
+  // Diet or group edits in a sheet: re-search when the sheet closes (diet words change the query).
+  const closeSheet = () => {
+    const was = sheet;
+    setSheet(null);
+    if ((was === 'group' || was === 'settings') && center && phase === 'board') search(center);
   };
 
-  /** Fetch the next page of places and add only new ones to the end of the deck. */
+  /** Fetch the next page of places and add only new ones to the end of the board. */
   const loadMore = async () => {
-    if (!center) return;
+    if (!center || loadingMore) return;
     const next = page + 1;
     setLoadingMore(true);
     try {
@@ -228,31 +220,13 @@ export function App() {
     }
   };
 
+  // "Pick for me" from the start screen: roll as soon as the board is ready.
   useEffect(() => {
-    // In Explore, scrolling to the end loads more instead.
-    if (phase !== 'deck' || view !== 'swipe' || loadingMore || exhausted || !center) return;
-    if (cards.length - index <= LOAD_AHEAD) loadMore();
-  }, [phase, index, cards.length, loadingMore, exhausted]);
-
-  // "Feeling lucky" from the start screen: roll as soon as the deck is ready.
-  useEffect(() => {
-    if (pendingLucky && phase === 'deck' && cards.length) {
+    if (pendingLucky && phase === 'board' && cards.length) {
       setPendingLucky(false);
       lucky();
     }
   }, [pendingLucky, phase, cards.length]);
-
-  const setBudget = (b: AppData['prefs']['budget']) => {
-    const next = { ...data, prefs: { ...data.prefs, budget: b } };
-    setData(next);
-    if (phase === 'deck') deal(list, next);
-  };
-  // Diet or group edits in a sheet: re-search when the sheet closes (diet words change the query).
-  const closeSheet = () => {
-    const was = sheet;
-    setSheet(null);
-    if ((was === 'group' || was === 'settings') && center && phase === 'deck') search(center);
-  };
 
   // Invite links (#join=XXXXXX) open the join screen, even if the app is already open.
   useEffect(() => {
@@ -265,7 +239,7 @@ export function App() {
     if (location.hash) history.replaceState(null, '', location.pathname + location.search);
   };
 
-  /** Start a shared session with the best ~20 places near you. */
+  /** Start a group board with the best places near you. */
   const startTogether = async (name: string) => {
     setSheet(null);
     try {
@@ -277,38 +251,24 @@ export function App() {
       }
       setPhase('loading');
       const found = list.length && center ? list : await findRestaurants(at, data.prefs.distance, dietQuery(diets));
-      const top = buildDeck(found, data, newId(), new Date()).cards.slice(0, 20).map((c) => c.r);
-      if (!top.length) throw new Error('No places nearby to swipe on — try a bigger distance.');
+      const top = buildDeck(found, data, newId(), new Date()).cards.slice(0, ROOM_PLACES).map((c) => c.r);
+      if (!top.length) throw new Error('No places nearby to choose from — try a bigger distance.');
       const s = await createRoom(top, name, data.prefs.diets);
       saveSession(s);
       setSession(s);
       setPhase('start');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not start a session.');
+      setError(e instanceof Error ? e.message : 'Could not start a group.');
       setPhase('error');
     }
   };
 
-  const card = cards[index];
-  const nextCard = cards[index + 1];
+  const wantedCards = wanted.map((id) => cards.find((c) => c.r.id === id)).filter((c): c is Card => Boolean(c));
 
-  const swipe = (dir: SwipeDir) => {
-    if (!card) return;
-    if (showHint) {
-      setShowHint(false);
-      try {
-        localStorage.setItem(HINT_KEY, '1');
-      } catch {
-        /* convenience only */
-      }
-    }
-    if (dir === 'left') {
-      play(data.prefs.sound, 'skip');
-      update((d) => ({ ...d, skips: [{ placeId: card.r.id, date: new Date().toISOString() }, ...d.skips].slice(0, MAX_SKIPS) }));
-      setIndex((i) => i + 1);
-      return;
-    }
-    choose(card);
+  const toggleWant = (c: Card) => {
+    const on = !wanted.includes(c.r.id);
+    setWanted((w) => (on ? [...w, c.r.id] : w.filter((id) => id !== c.r.id)));
+    play(data.prefs.sound, on ? 'reveal' : 'skip');
   };
 
   const choose = (c: Card, stamp = "Let's go!") => {
@@ -317,78 +277,45 @@ export function App() {
       ...d,
       picks: [{ id: pickId, placeId: c.r.id, name: c.r.name, food: c.r.typeLabel, art: c.r.art, mapsUrl: c.r.mapsUrl, date: new Date().toISOString(), verdict: null }, ...d.picks],
     }));
+    setShortlistOpen(false);
     setChosen({ card: c, pickId, stamp });
     setPhase('chosen');
     play(data.prefs.sound, 'celebrate');
     navigator.vibrate?.(30);
   };
 
-  /** 🎲 Roll the dice: a quick shuffle, then land on one of the best few remaining places. */
+  /** 🎲 Let fate pick: from your shortlist if you have one, else from the best few places. */
   const lucky = () => {
-    const pool = cards.slice(index, index + LUCKY_POOL);
+    const pool = wantedCards.length ? wantedCards : cards.slice(0, LUCKY_POOL);
     if (!pool.length) return;
     const pick = pool[Math.floor(Math.random() * pool.length)];
-    // Put it at the current position so "Changed my mind" and ↺ behave as usual.
-    setCards((cs) => [...cs.slice(0, index), pick, ...cs.slice(index).filter((c) => c !== pick)]);
+    setShortlistOpen(false);
     setPhase('rolling');
     play(data.prefs.sound, 'skip');
-    window.setTimeout(() => choose(pick, 'Feeling lucky!'), reducedMotion() ? 0 : ROLL_MS);
+    window.setTimeout(() => choose(pick, wantedCards.length ? 'Fate picked!' : 'Feeling lucky!'), reducedMotion() ? 0 : ROLL_MS);
   };
 
-  /** 🔀 Reorder the cards you haven't seen yet. */
-  const shuffleDeck = () => {
-    setCards((cs) => {
-      const rest = cs.slice(index);
-      for (let i = rest.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [rest[i], rest[j]] = [rest[j], rest[i]];
-      }
-      return [...cs.slice(0, index), ...rest];
-    });
-    play(data.prefs.sound, 'skip');
-    toast('Shuffled');
-  };
-
-  /** Back to the deck after a pick, continuing with the next place. */
-  const continueDeck = () => {
-    const fromDeck = view === 'swipe' && chosen && cards[index]?.r.id === chosen.card.r.id;
+  /** Back to the board after a pick (your shortlist is kept). */
+  const keepLooking = () => {
     setChosen(null);
-    setPhase('deck');
+    setPhase('board');
     // Group or diet edited meanwhile: re-rank so clashing places drop out.
     if (JSON.stringify(effectiveConstraints(data)) !== dealtFor) deal(list);
-    else if (fromDeck) setIndex((i) => i + 1);
   };
 
-  // "Not this one": undo the pick. It counts as a skip, so ↺ can bring the place back.
+  // "Not this one": undo the pick; it sinks for a few days and leaves your shortlist.
   const changedMind = () => {
-    if (chosen)
+    if (chosen) {
       update((d) => ({
         ...d,
         picks: d.picks.filter((p) => p.id !== chosen.pickId),
         skips: [{ placeId: chosen.card.r.id, date: new Date().toISOString() }, ...d.skips].slice(0, MAX_SKIPS),
       }));
+      setWanted((w) => w.filter((id) => id !== chosen.card.r.id));
+    }
     play(data.prefs.sound, 'skip');
-    continueDeck();
+    keepLooking();
   };
-
-  const undoSkip = () => {
-    if (index === 0) return;
-    const back = cards[index - 1];
-    setIndex((i) => i - 1);
-    // Only forget the skip if it belongs to the card we're bringing back.
-    update((d) => ({ ...d, skips: d.skips[0]?.placeId === back?.r.id ? d.skips.slice(1) : d.skips }));
-  };
-
-  useEffect(() => {
-    if (phase !== 'deck' || view !== 'swipe' || sheet || confirmState) return;
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).closest('input, textarea, select')) return;
-      if (e.key === 'ArrowLeft') swipe('left');
-      if (e.key === 'ArrowRight') swipe('right');
-    };
-    addEventListener('keydown', onKey);
-    return () => removeEventListener('keydown', onKey);
-  });
 
   const sheetProps: SheetProps = { data, update, toast, confirm, onClose: closeSheet };
   const forLine = [people > 1 ? `For ${people}` : null, ...diets.map((d) => DIETS[d].label)].filter(Boolean).join(' · ');
@@ -410,28 +337,6 @@ export function App() {
             </span>
             <span class="logo-text">Eat What?</span>
           </button>
-          {!session && !joinId && (phase === 'deck' || phase === 'chosen' || phase === 'rolling') && (
-            <div class="view-switch" role="tablist" aria-label="View">
-              {(['swipe', 'explore'] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  role="tab"
-                  aria-selected={view === v}
-                  class={view === v ? 'is-on' : ''}
-                  onClick={() => {
-                    setView(v);
-                    if (phase === 'chosen') {
-                      setChosen(null);
-                      setPhase('deck');
-                    }
-                  }}
-                >
-                  <Icon name={v === 'swipe' ? 'cards' : 'grid'} size={16} /> {v === 'swipe' ? 'Swipe' : 'Explore'}
-                </button>
-              ))}
-            </div>
-          )}
           <nav class="top-actions" aria-label="More">
             <button type="button" class="icon-btn" aria-label={`Who's eating${people > 1 ? ` (${people} people)` : ''}`} onClick={() => setSheet('group')}>
               <Icon name="people" />
@@ -466,200 +371,215 @@ export function App() {
               onCancel={clearJoin}
             />
           ) : (
-          <>
-          {phase === 'start' && (
-            <section class="start">
-              <h1>
-                What are we <span class="brush">eating?</span>
-              </h1>
-              <p class="lede">A deck of what's good nearby. Swipe right if it tempts you, left to skip.</p>
-              <Button variant="primary" size="lg" class="btn-surprise" icon="cards" onClick={surprise}>
-                Start swiping
-              </Button>
-              <Button
-                variant="secondary"
-                icon="dice"
-                onClick={() => {
-                  setPendingLucky(true);
-                  surprise();
-                }}
-              >
-                I'm feeling lucky
-              </Button>
-              {PROXY_URL && currentSource() === 'osm' && (
-                <button type="button" class="link small" onClick={() => setSheet('settings')}>
-                  Have an access code? Unlock photos & ratings
-                </button>
+            <>
+              {phase === 'start' && (
+                <section class="start">
+                  <h1>
+                    What are we <span class="brush">eating?</span>
+                  </h1>
+                  <p class="lede">Everything good nearby, as photos. Tap what tempts you — then decide in a tap.</p>
+                  <Button variant="primary" size="lg" class="btn-surprise" icon="grid" onClick={findFood}>
+                    Show me food nearby
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    icon="dice"
+                    onClick={() => {
+                      setPendingLucky(true);
+                      findFood();
+                    }}
+                  >
+                    Just pick for me
+                  </Button>
+                  <button type="button" class="link small" onClick={() => setSheet('group')}>
+                    Deciding with friends? Pick together →
+                  </button>
+                  {PROXY_URL && currentSource() === 'osm' && (
+                    <button type="button" class="link small" onClick={() => setSheet('settings')}>
+                      Have an access code? Unlock photos & ratings
+                    </button>
+                  )}
+                </section>
               )}
-            </section>
-          )}
 
-          {phase === 'locating' && <Status text="Finding where you are…" />}
-          {phase === 'loading' && <Deal />}
-          {phase === 'rolling' && <Deal label="Rolling the dice…" />}
-
-          {phase === 'where' && (
-            <section class="start">
-              <h2 class="h-sm">Where are you eating?</h2>
-              <p class="lede">{error || "Location is off, so tell me the area instead."}</p>
-              <form class="where" onSubmit={searchArea}>
-                <input aria-label="Area" placeholder="e.g. SS2 Petaling Jaya" value={area} maxLength={80} onInput={(e) => setArea((e.target as HTMLInputElement).value)} autoFocus />
-                <Button variant="primary" type="submit" icon="search">
-                  Go
-                </Button>
-              </form>
-              <button type="button" class="link small" onClick={surprise}>
-                Try my location again
-              </button>
-            </section>
-          )}
-
-          {phase === 'error' && (
-            <section class="start">
-              <h2 class="h-sm">Hmm, that didn't work</h2>
-              <p class="lede">{error}</p>
-              <Button variant="primary" size="lg" icon="shuffle" onClick={() => (center ? search(center) : surprise())}>
-                Try again
-              </Button>
-            </section>
-          )}
-
-          {(phase === 'start' || phase === 'deck' || phase === 'chosen') && (
-            <div class="filters" aria-label="Filters">
-              <PillSelect icon="pin" label="Distance" value={data.prefs.distance} onChange={setDistance} options={DISTANCES} />
-              <PillSelect icon="wallet" label="Budget per person" value={data.prefs.budget} onChange={setBudget} options={BUDGETS} />
-              <PillSelect icon="clock" label="Opening hours" value={data.prefs.showClosed} onChange={setShowClosed} options={OPEN_FILTER} />
-              {forLine && (
-                <button type="button" class="pill for-line" onClick={() => setSheet(people > 1 ? 'group' : 'settings')}>
-                  <Icon name={people > 1 ? 'people' : 'leaf'} size={15} /> {forLine}
-                </button>
+              {phase === 'locating' && (
+                <p class="status" role="status">
+                  Finding where you are…
+                </p>
               )}
-            </div>
-          )}
+              {phase === 'loading' && <Deal />}
+              {phase === 'rolling' && <Deal label="Rolling the dice…" />}
 
-          {phase === 'deck' && view === 'explore' && (
-            <ExploreGrid
-              cards={cards}
-              diets={diets}
-              pickedIds={new Set(data.picks.map((p) => p.placeId))}
-              loadingMore={loadingMore}
-              canLoadMore={!exhausted && !!center}
-              onLoadMore={loadMore}
-              onChoose={(c) => choose(c)}
-            />
-          )}
+              {phase === 'where' && (
+                <section class="start">
+                  <h2 class="h-sm">Where are you eating?</h2>
+                  <p class="lede">{error || 'Location is off, so tell me the area instead.'}</p>
+                  <form class="where" onSubmit={searchArea}>
+                    <input aria-label="Area" placeholder="e.g. SS2 Petaling Jaya" value={area} maxLength={80} onInput={(e) => setArea((e.target as HTMLInputElement).value)} autoFocus />
+                    <Button variant="primary" type="submit" icon="search">
+                      Go
+                    </Button>
+                  </form>
+                  <button type="button" class="link small" onClick={findFood}>
+                    Try my location again
+                  </button>
+                </section>
+              )}
 
-          {phase === 'deck' && view === 'swipe' && card && (
-            <section class="deck-area">
-              <div class="stack">
-                {[nextCard, card].map((c) => c && <SwipeCard key={c.r.id} card={c} diets={diets} onSwipe={swipe} top={c === card} />)}
-                {showHint && (
-                  <p class="swipe-hint" aria-hidden="true">
-                    <span>← not today</span>
-                    <span>let's go →</span>
+              {phase === 'error' && (
+                <section class="start">
+                  <h2 class="h-sm">Hmm, that didn't work</h2>
+                  <p class="lede">{error}</p>
+                  <Button variant="primary" size="lg" icon="shuffle" onClick={() => (center ? search(center) : findFood())}>
+                    Try again
+                  </Button>
+                </section>
+              )}
+
+              {(phase === 'start' || phase === 'board') && (
+                <div class="filters" aria-label="Filters">
+                  <PillSelect icon="pin" label="Distance" value={data.prefs.distance} onChange={setDistance} options={DISTANCES} />
+                  <PillSelect icon="wallet" label="Budget per person" value={data.prefs.budget} onChange={setBudget} options={BUDGETS} />
+                  <PillSelect icon="clock" label="Opening hours" value={data.prefs.showClosed} onChange={setShowClosed} options={OPEN_FILTER} />
+                  {forLine && (
+                    <button type="button" class="pill for-line" onClick={() => setSheet(people > 1 ? 'group' : 'settings')}>
+                      <Icon name={people > 1 ? 'people' : 'leaf'} size={15} /> {forLine}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {phase === 'board' && cards.length > 0 && (
+                <>
+                  <PickBoard
+                    cards={cards}
+                    diets={diets}
+                    wanted={new Set(wanted)}
+                    onToggle={toggleWant}
+                    pickedIds={new Set(data.picks.map((p) => p.placeId))}
+                    loadingMore={loadingMore}
+                    canLoadMore={!exhausted && !!center}
+                    onLoadMore={loadMore}
+                  />
+                  <Tray picks={wantedCards} onOpen={() => (wantedCards.length === 1 ? choose(wantedCards[0]) : setShortlistOpen(true))} onLucky={lucky} />
+                </>
+              )}
+
+              {phase === 'board' && cards.length === 0 && (
+                <section class="start">
+                  <h2 class="h-sm">Nothing nearby fits</h2>
+                  <p class="lede">
+                    {list.length
+                      ? `I found ${list.length} places, but:`
+                      : currentSource() === 'osm'
+                        ? 'The free map has no restaurants listed this close.'
+                        : 'No restaurants found this close.'}
                   </p>
-                )}
-              </div>
-              <div class="swipe-buttons">
-                <button type="button" class="round round-small" aria-label={`Shuffle the ${cards.length - index} places left`} title="Shuffle" onClick={shuffleDeck} disabled={cards.length - index < 3}>
-                  <Icon name="shuffle" size={18} />
-                </button>
-                <button type="button" class="round round-undo" aria-label="Undo last skip" onClick={undoSkip} disabled={index === 0}>
-                  <Icon name="undo" size={18} />
-                </button>
-                <button type="button" class="round round-no" aria-label="Not today" onClick={() => swipe('left')}>
-                  <Icon name="x" size={28} />
-                </button>
-                <button type="button" class="round round-yes" aria-label="Let's go here" onClick={() => swipe('right')}>
-                  <Icon name="check" size={30} />
-                </button>
-                <button type="button" class="round round-lucky" aria-label="I'm feeling lucky — pick one for me" title="I'm feeling lucky" onClick={lucky}>
-                  <Icon name="dice" size={22} />
-                </button>
-              </div>
-            </section>
-          )}
-
-          {phase === 'deck' && view === 'swipe' && !card && loadingMore && <Deal label="Finding more places…" />}
-          {phase === 'deck' && view === 'swipe' && !card && !loadingMore && (
-            <section class="start">
-              <h2 class="h-sm">{cards.length ? "That's everything nearby" : 'Nothing nearby fits'}</h2>
-              <p class="lede">
-                {cards.length
-                  ? `You've seen all ${cards.length}.`
-                  : list.length
-                    ? `I found ${list.length} places, but:`
-                    : currentSource() === 'osm'
-                      ? 'The free map has no restaurants listed this close.'
-                      : 'No restaurants found this close.'}
-              </p>
-              {removed.length > 0 && (
-                <ul class="blockers">
-                  {removed.map((b) => (
-                    <li key={b}>{b}</li>
-                  ))}
-                </ul>
+                  {removed.length > 0 && (
+                    <ul class="blockers">
+                      {removed.map((b) => (
+                        <li key={b}>{b}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <div class="action-main">
+                    {data.prefs.distance !== 'drive' && (
+                      <Button variant="primary" size="lg" onClick={() => setDistance('drive')}>
+                        Look further
+                      </Button>
+                    )}
+                    {!data.prefs.showClosed && (
+                      <Button variant="secondary" size="lg" onClick={() => setShowClosed(true)}>
+                        Include closed places
+                      </Button>
+                    )}
+                    {budget !== null && (
+                      <Button variant="secondary" size="lg" onClick={() => setBudget(null)}>
+                        Any budget
+                      </Button>
+                    )}
+                  </div>
+                </section>
               )}
-              <div class="action-main">
-                {data.prefs.distance !== 'drive' && (
-                  <Button variant="primary" size="lg" onClick={() => setDistance('drive')}>
-                    Look further
-                  </Button>
-                )}
-                {cards.length > 0 && (
-                  <Button variant="secondary" size="lg" icon="shuffle" onClick={() => deal(list)}>
-                    Shuffle again
-                  </Button>
-                )}
-                {budget !== null && (
-                  <Button variant="secondary" size="lg" onClick={() => setBudget(null)}>
-                    Any budget
-                  </Button>
-                )}
-              </div>
-            </section>
-          )}
 
-          {phase === 'chosen' && chosen && (
-            <section class="deck-area">
-              <div class="stack">
-                <article class="card is-chosen">
-                  <CardFace card={chosen.card} diets={diets} stamp={chosen.stamp} />
-                  <Splats />
-                </article>
-              </div>
-              <div class="action-main chosen-actions">
-                <a class="btn btn-primary btn-lg" href={chosen.card.r.mapsUrl} target="_blank" rel="noopener noreferrer">
-                  <Icon name="map" size={22} />
-                  <span>Take me there</span>
-                </a>
-                <Button variant="secondary" size="lg" icon="cards" onClick={continueDeck}>
-                  Keep exploring
-                </Button>
-              </div>
-              <p class="chosen-links">
-                <button type="button" class="link small" onClick={changedMind}>
-                  Not this one — undo
-                </button>
-                <span aria-hidden="true">·</span>
-                <button
-                  type="button"
-                  class="link small"
-                  onClick={() => {
-                    setChosen(null);
-                    setPhase('start');
-                  }}
-                >
-                  Done
-                </button>
-              </p>
-              <p class="remaining">Saved in your picks (🕐) — keep exploring and it stays there.</p>
-            </section>
-          )}
-          </>
+              {phase === 'chosen' && chosen && (
+                <section class="deck-area">
+                  <div class="stack">
+                    <article class="card is-chosen">
+                      <CardFace card={chosen.card} diets={diets} stamp={chosen.stamp} />
+                      <Splats />
+                    </article>
+                  </div>
+                  <div class="action-main chosen-actions">
+                    <a class="btn btn-primary btn-lg" href={chosen.card.r.mapsUrl} target="_blank" rel="noopener noreferrer">
+                      <Icon name="map" size={22} />
+                      <span>Take me there</span>
+                    </a>
+                    <Button variant="secondary" size="lg" icon="grid" onClick={keepLooking}>
+                      Keep looking
+                    </Button>
+                  </div>
+                  <p class="chosen-links">
+                    <button type="button" class="link small" onClick={changedMind}>
+                      Not this one — undo
+                    </button>
+                    <span aria-hidden="true">·</span>
+                    <button
+                      type="button"
+                      class="link small"
+                      onClick={() => {
+                        setChosen(null);
+                        setPhase('start');
+                      }}
+                    >
+                      Done
+                    </button>
+                  </p>
+                  <p class="remaining">Saved in your picks (🕐). Your shortlist is kept if you keep looking.</p>
+                </section>
+              )}
+            </>
           )}
         </main>
       </div>
+
+      {shortlistOpen && (
+        <Sheet
+          open
+          title={`Your shortlist · ${wantedCards.length}`}
+          onClose={() => setShortlistOpen(false)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setShortlistOpen(false)}>
+                Keep looking
+              </Button>
+              <Button variant="primary" icon="dice" onClick={lucky}>
+                Let fate pick
+              </Button>
+            </>
+          }
+        >
+          <p class="muted small">Tap the one you want, or let fate pick between them.</p>
+          <ul class="shortlist">
+            {wantedCards.map((c) => (
+              <li key={c.r.id}>
+                <button type="button" class="short-row" onClick={() => choose(c)} aria-label={`Go with ${c.r.name}`}>
+                  {c.r.photos[0] ? <img src={c.r.photos[0].url} alt="" /> : <FoodArt kind={c.r.art} size={72} />}
+                  <span class="short-main">
+                    <strong>{c.r.name}</strong>
+                    <span class="muted small">{facts(c).join(' · ')}</span>
+                    <span class="short-why">{c.reasons[0]}</span>
+                  </span>
+                  <span class="short-go">Go</span>
+                </button>
+                <button type="button" class="icon-btn" aria-label={`Remove ${c.r.name} from shortlist`} onClick={() => toggleWant(c)}>
+                  <Icon name="x" size={18} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Sheet>
+      )}
 
       {sheet === 'group' && (
         <GroupSheet
@@ -670,7 +590,7 @@ export function App() {
                   canStart: currentSource() === 'google',
                   start: startTogether,
                   join: (code) => {
-                    if (!ROOM_CODE.test(code)) return toast('Session codes are 6 letters/numbers, like K7XQ2M');
+                    if (!ROOM_CODE.test(code)) return toast('Group codes are 6 letters/numbers, like K7XQ2M');
                     setSheet(null);
                     setJoinId(code);
                   },
@@ -710,48 +630,38 @@ export function App() {
   );
 }
 
-function Status({ text }: { text: string }) {
+/** The decision tray: your shortlist at a glance, and the way to decide. */
+function Tray({ picks, onOpen, onLucky }: { picks: Card[]; onOpen: () => void; onLucky: () => void }) {
+  const extra = picks.length - TRAY_THUMBS;
   return (
-    <p class="status" role="status">
-      {text}
-    </p>
-  );
-}
-
-function Deal({ label = "Sniffing out what's nearby…" }: { label?: string }) {
-  return (
-    <div class="deck" role="status" aria-label="Finding places nearby…">
-      <span class="deck-card c1" />
-      <span class="deck-card c2" />
-      <span class="deck-card c3">
-        <span>?</span>
-      </span>
-      <p class="deck-label">{label}</p>
-    </div>
-  );
-}
-
-const SPLAT_COLOURS = ['#D8452B', '#E3A72F', '#7A8450', '#F4CB63', '#A8321D', '#AAB27A'];
-
-function Splats() {
-  return (
-    <div class="splats" aria-hidden="true">
-      {SPLAT_COLOURS.concat(SPLAT_COLOURS).map((c, i) => {
-        const angle = (i / 12) * Math.PI * 2 + 0.3;
-        const dist = 110 + (i % 3) * 30;
-        return (
-          <span
-            key={i}
-            style={{
-              background: c,
-              '--dx': `${Math.round(Math.cos(angle) * dist)}px`,
-              '--dy': `${Math.round(Math.sin(angle) * dist)}px`,
-              '--s': `${0.6 + (i % 4) * 0.25}`,
-              animationDelay: `${(i % 4) * 30}ms`,
-            }}
-          />
-        );
-      })}
+    <div class={`tray ${picks.length ? 'has-picks' : ''}`} role="region" aria-label="Your shortlist">
+      {picks.length === 0 ? (
+        <>
+          <p class="tray-hint">
+            <Icon name="heart" size={16} /> Tap the ones that tempt you
+          </p>
+          <Button variant="secondary" size="sm" icon="dice" onClick={onLucky}>
+            Pick for me
+          </Button>
+        </>
+      ) : (
+        <>
+          <button type="button" class="tray-thumbs" onClick={onOpen} aria-label={`Your shortlist: ${picks.map((c) => c.r.name).join(', ')}`}>
+            {picks.slice(0, TRAY_THUMBS).map((c) => (
+              <span key={c.r.id} class="tray-thumb">
+                {c.r.photos[0] ? <img src={c.r.photos[0].url} alt="" /> : <FoodArt kind={c.r.art} size={40} />}
+              </span>
+            ))}
+            {extra > 0 && <span class="tray-thumb tray-more">+{extra}</span>}
+          </button>
+          <button type="button" class="round round-lucky" aria-label="Let fate pick from my shortlist" title="Let fate pick" onClick={onLucky}>
+            <Icon name="dice" size={20} />
+          </button>
+          <Button variant="primary" onClick={onOpen}>
+            {picks.length === 1 ? 'Go with this' : `Decide · ${picks.length}`}
+          </Button>
+        </>
+      )}
     </div>
   );
 }

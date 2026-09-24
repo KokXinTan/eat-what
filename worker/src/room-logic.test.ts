@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRoom, decide, join, leave, matches, MAX_MEMBERS, RoomError, view, vote } from './room-logic';
+import { createRoom, decide, join, leader, leave, matches, MAX_MEMBERS, RoomError, startTimer, view, vote } from './room-logic';
 
 const NOW = 1_800_000_000_000;
 const LIST = [
@@ -108,5 +108,34 @@ describe('voting and matches', () => {
 
   it('refuses to create an empty room', () => {
     expect(() => createRoom('X', { list: [] }, 't', 'h', NOW)).toThrow(/needs some places/);
+  });
+});
+
+describe('tap-to-want board and countdown', () => {
+  it('taps toggle on and off', () => {
+    const s = room();
+    vote(s, 'host-token', 'g:a', 'yes');
+    expect(s.votes['g:a']).toEqual({ host: 'yes' });
+    vote(s, 'host-token', 'g:a', null);
+    expect(s.votes['g:a']).toEqual({});
+  });
+
+  it('only the host starts the countdown; the most-wanted place wins, ties to the better-ranked', () => {
+    const s = room();
+    join(s, { name: 'Aina' }, true, 't1', 'm1', NOW);
+    expect(() => startTimer(s, 't1', 60, NOW)).toThrow(/Only the host/);
+    expect(() => startTimer(s, 'host-token', 5, NOW)).toThrow(/15–180/);
+    startTimer(s, 'host-token', 60, NOW);
+    vote(s, 'host-token', 'g:b', 'yes', NOW);
+    vote(s, 't1', 'g:a', 'yes', NOW);
+    expect(leader(s)).toBe('g:a'); // 1–1 tie: g:a is earlier in the list
+    vote(s, 't1', 'g:b', 'yes', NOW);
+    expect(leader(s)).toBe('g:b');
+    const during = view(s, 't1', NOW + 30_000);
+    const after = view(s, 't1', NOW + 61_000);
+    if (during.status !== 'approved' || after.status !== 'approved') throw new Error('approved');
+    expect(during.decided).toBeNull();
+    expect(after.decided).toBe('g:b');
+    expect(() => vote(s, 't1', 'g:a', 'yes', NOW + 61_000)).toThrow(/Time is up/);
   });
 });

@@ -1,7 +1,7 @@
 // Durable Object: one instance per room. It stores the room state and applies the pure rules in
 // room-logic.ts. It is only ever called by our own Worker (never directly from browsers), which
 // decides whether a joiner's access code is valid and passes that in a trusted header.
-import { createRoom, decide, join, leave, RoomError, view, vote, type RoomState } from './room-logic';
+import { createRoom, decide, join, leave, RoomError, startTimer, view, vote, type RoomState } from './room-logic';
 
 interface DOState {
   storage: {
@@ -46,6 +46,7 @@ export class Room {
       if (action === 'state') return Response.json(view(state, url.searchParams.get('token')));
       if (action === 'vote') vote(state, body.token, body.placeId, body.vote);
       else if (action === 'decide') decide(state, body.token, body.memberId, body.approve);
+      else if (action === 'timer') startTimer(state, body.token, body.seconds);
       else if (action === 'leave') leave(state, body.token);
       else throw new RoomError('Not found.', 404);
       await this.ctx.storage.put('state', state);

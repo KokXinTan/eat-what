@@ -153,7 +153,7 @@ export function slimPlace(p: Json): Json {
 const ROOM_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const ROOM_ID_LENGTH = 6;
 const ROOM_ID = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/;
-const ROOM_ACTIONS = ['join', 'state', 'vote', 'decide', 'leave'];
+const ROOM_ACTIONS = ['join', 'state', 'vote', 'decide', 'leave', 'timer'];
 const CREATE_ATTEMPTS = 3;
 
 /** Short, unambiguous room code like "K7XQ2M" (no 0/O, 1/I/L). */
@@ -266,7 +266,7 @@ export default {
 
     const ip = req.headers.get('CF-Connecting-IP') ?? 'unknown';
 
-    // ---- Swipe together: /rooms (create) and /rooms/:id/:action ----
+    // ---- Pick together: /rooms (create) and /rooms/:id/:action ----
     if (url.pathname === '/rooms' || url.pathname.startsWith('/rooms/')) {
       if (!(await env.ROOM_LIMITER.limit({ key: ip })).success) return json({ error: 'Too many requests — slow down a little.' }, 429, origin);
       const [, , roomId, action] = url.pathname.split('/');

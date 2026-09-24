@@ -1,10 +1,13 @@
-// Pure logic for a "swipe together" room. The Durable Object only loads, calls these and saves,
+// Pure logic for a "pick together" room. The Durable Object only loads, calls these and saves,
 // so the rules are easy to test: who may join, who may vote, and what each person may see.
 
 export const ROOM_TTL_MS = 6 * 60 * 60 * 1000;
 export const MAX_MEMBERS = 12;
 export const MAX_PLACES = 25;
 export const MAX_LIST_BYTES = 250_000;
+/** Host countdown bounds, in seconds. */
+export const MIN_TIMER_S = 15;
+export const MAX_TIMER_S = 180;
 const MAX_NAME = 24;
 const DIETS = ['halal', 'no-pork', 'no-beef', 'vegetarian', 'vegan'];
 
@@ -35,6 +38,8 @@ export interface RoomState {
   members: Member[];
   /** placeId → memberId → vote */
   votes: Record<string, Record<string, Vote>>;
+  /** When the host's countdown ends (ms since epoch), if one was started. */
+  deadline?: number;
 }
 
 export class RoomError extends Error {
@@ -107,12 +112,37 @@ export function decide(state: RoomState, token: unknown, memberId: unknown, appr
   return m;
 }
 
-export function vote(state: RoomState, token: unknown, placeId: unknown, v: unknown): void {
+/** Tap to want a place ('yes'), or null to take the tap back. */
+export function vote(state: RoomState, token: unknown, placeId: unknown, v: unknown, now = Date.now()): void {
   const m = byToken(state, token);
   if (m.status !== 'approved') throw new RoomError('Waiting for the host to let you in.', 403);
   if (typeof placeId !== 'string' || !state.list.some((p) => p.id === placeId)) throw new RoomError('Unknown place.', 400);
-  if (v !== 'yes' && v !== 'no') throw new RoomError('Vote yes or no.', 400);
-  (state.votes[placeId] ??= {})[m.id] = v;
+  if (v !== 'yes' && v !== 'no' && v !== null) throw new RoomError('Vote yes, no or null.', 400);
+  if (state.deadline && now >= state.deadline) throw new RoomError('Time is up — the group has decided.', 409);
+  const votes = (state.votes[placeId] ??= {});
+  if (v === null) delete votes[m.id];
+  else votes[m.id] = v;
+}
+
+/** Host starts (or restarts) a countdown; when it ends, the most-wanted place wins. */
+export function startTimer(state: RoomState, token: unknown, seconds: unknown, now = Date.now()): void {
+  const m = byToken(state, token);
+  if (!m.host) throw new RoomError('Only the host can start the countdown.', 403);
+  const s = Number(seconds);
+  if (!Number.isFinite(s) || s < MIN_TIMER_S || s > MAX_TIMER_S) throw new RoomError('Pick 15–180 seconds.', 400);
+  state.deadline = now + Math.round(s) * 1000;
+}
+
+/** Most-wanted place (at least one tap); ties go to the one earlier in the list (better ranked). */
+export function leader(state: RoomState): string | null {
+  const approved = state.members.filter((m) => m.status === 'approved');
+  let best: string | null = null;
+  let bestCount = 0;
+  for (const p of state.list) {
+    const n = approved.filter((m) => state.votes[p.id]?.[m.id] === 'yes').length;
+    if (n > bestCount) [best, bestCount] = [p.id, n];
+  }
+  return best;
 }
 
 export function leave(state: RoomState, token: unknown): void {
@@ -130,7 +160,7 @@ export function matches(state: RoomState): string[] {
 }
 
 /** What one person may see. Pending/denied people see nothing about the room's places. */
-export function view(state: RoomState, token: unknown) {
+export function view(state: RoomState, token: unknown, now = Date.now()) {
   const me = byToken(state, token);
   const host = state.members.find((m) => m.host)!;
   if (me.status !== 'approved') return { status: me.status, hostName: host.name, roomId: state.id };
@@ -153,5 +183,8 @@ export function view(state: RoomState, token: unknown) {
     ),
     myVotes: Object.fromEntries(Object.entries(state.votes).flatMap(([pid, v]) => (v[me.id] ? [[pid, v[me.id]]] : []))),
     matches: matches(state),
+    deadline: state.deadline ?? null,
+    now,
+    decided: state.deadline && now >= state.deadline ? leader(state) : null,
   };
 }

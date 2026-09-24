@@ -1,4 +1,4 @@
-// Client for "swipe together" rooms on the Worker. A session is just { roomId, token }, kept in
+// Client for "pick together" rooms on the Worker. A session is just { roomId, token }, kept in
 // localStorage so a reload doesn't kick you out.
 import { getAccessCode, PROXY_URL } from './places';
 import type { DietId, Restaurant } from './types';
@@ -32,6 +32,12 @@ export type RoomView =
       tally: Record<string, { yes: string[]; no: number }>;
       myVotes: Record<string, 'yes' | 'no'>;
       matches: string[];
+      /** When the host's countdown ends (server clock, ms), if started. */
+      deadline: number | null;
+      /** Server clock when this view was made, to correct for phone clock drift. */
+      now: number;
+      /** The winning place once the countdown has ended. */
+      decided: string | null;
     };
 
 export class RoomGone extends Error {}
@@ -94,8 +100,14 @@ export function roomState(s: Session) {
   return call<RoomView>(`/rooms/${s.roomId}/state?token=${encodeURIComponent(s.token)}`);
 }
 
-export function vote(s: Session, placeId: string, v: 'yes' | 'no') {
+/** Tap to want a place ('yes'), or null to take the tap back. */
+export function vote(s: Session, placeId: string, v: 'yes' | null) {
   return call(`/rooms/${s.roomId}/vote`, { method: 'POST', body: JSON.stringify({ token: s.token, placeId, vote: v }) });
+}
+
+/** Host only: start a countdown; when it ends, the most-wanted place wins. */
+export function startTimer(s: Session, seconds: number) {
+  return call(`/rooms/${s.roomId}/timer`, { method: 'POST', body: JSON.stringify({ token: s.token, seconds }) });
 }
 
 export function decide(s: Session, memberId: string, approve: boolean) {
