@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { ArtDefs } from './components/FoodArt';
 import { GroupSheet, HistorySheet, SettingsSheet, type SheetProps } from './components/Sheets';
-import { CardDetails, CardFace, SwipeCard, type SwipeDir } from './components/SwipeCard';
+import { CardFace, SwipeCard, type SwipeDir } from './components/SwipeCard';
 import { Button, Icon, PillSelect, Sheet } from './components/ui';
 import { DIETS, dietQuery } from './lib/diet';
 import { AccessCodeError, currentSource, findRestaurants, geocode, getLocation, PROXY_URL, setAccessCode, type LatLng } from './lib/places';
@@ -47,7 +47,6 @@ export function App() {
   const [error, setError] = useState('');
   const [area, setArea] = useState('');
   const [sheet, setSheet] = useState<'group' | 'history' | 'settings' | null>(null);
-  const [details, setDetails] = useState<Card | null>(null);
   const [toastMsg, setToastMsg] = useState<{ text: string; id: number } | null>(null);
   const [confirmState, setConfirmState] = useState<(ConfirmOptions & { resolve: (ok: boolean) => void }) | null>(null);
   const [storageOk, setStorageOk] = useState(true);
@@ -204,7 +203,7 @@ export function App() {
   };
 
   useEffect(() => {
-    if (phase !== 'deck' || sheet || details || confirmState) return;
+    if (phase !== 'deck' || sheet || confirmState) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest('input, textarea, select')) return;
       if (e.key === 'ArrowLeft') swipe('left');
@@ -260,9 +259,9 @@ export function App() {
               <h1>
                 What are we <span class="brush">eating?</span>
               </h1>
-              <p class="lede">One tap. Swipe through what's good nearby — right to go, left to skip.</p>
-              <Button variant="primary" size="lg" class="btn-surprise" icon="spark" onClick={surprise}>
-                Surprise me
+              <p class="lede">A deck of what's good nearby. Swipe right if it tempts you, left to skip.</p>
+              <Button variant="primary" size="lg" class="btn-surprise" icon="cards" onClick={surprise}>
+                Start swiping
               </Button>
               {PROXY_URL && currentSource() === 'osm' && (
                 <button type="button" class="link small" onClick={() => setSheet('settings')}>
@@ -321,7 +320,7 @@ export function App() {
                     <CardFace card={nextCard} diets={diets} />
                   </article>
                 )}
-                <SwipeCard key={card.r.id} card={card} diets={diets} onSwipe={swipe} onInfo={() => setDetails(card)} />
+                <SwipeCard key={card.r.id} card={card} diets={diets} onSwipe={swipe} />
                 {showHint && (
                   <p class="swipe-hint" aria-hidden="true">
                     <span>← not today</span>
@@ -389,7 +388,7 @@ export function App() {
             <section class="deck-area">
               <div class="stack">
                 <article class="card is-chosen">
-                  <CardFace card={chosen.card} diets={diets} stamp="Let's go!" onInfo={() => setDetails(chosen.card)} />
+                  <CardFace card={chosen.card} diets={diets} stamp="Let's go!" />
                   <Splats />
                 </article>
               </div>
@@ -408,35 +407,6 @@ export function App() {
         </main>
       </div>
 
-      {details && (
-        <Sheet
-          open
-          title={details.r.name}
-          onClose={() => setDetails(null)}
-          footer={
-            <>
-              <a class="btn btn-ghost" href={details.r.mapsUrl} target="_blank" rel="noopener noreferrer">
-                <Icon name="map" size={18} />
-                <span>Google Maps</span>
-              </a>
-              {phase === 'deck' && details.r.id === card?.r.id && (
-                <Button
-                  variant="primary"
-                  icon="check"
-                  onClick={() => {
-                    setDetails(null);
-                    swipe('right');
-                  }}
-                >
-                  Let's go here
-                </Button>
-              )}
-            </>
-          }
-        >
-          <CardDetails card={details} diets={diets} />
-        </Sheet>
-      )}
       {sheet === 'group' && <GroupSheet {...sheetProps} />}
       {sheet === 'history' && <HistorySheet {...sheetProps} />}
       {sheet === 'settings' && <SettingsSheet {...sheetProps} />}

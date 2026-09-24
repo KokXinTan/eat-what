@@ -108,15 +108,32 @@ const frontLine = (card: Card) =>
 const dietLine = (card: Card, diets: DietId[]) =>
   `${card.diet.status === 'ok' ? 'Looks suitable' : 'Unverified'}: ${diets.map((d) => DIETS[d].label).join(', ')}`;
 
-/** Front of the card: fits the screen without scrolling. Details live in <CardDetails/>. */
-export function CardFace({ card, diets, stamp, onInfo }: { card: Card; diets: DietId[]; stamp?: string | null; onInfo?: () => void }) {
+/** Set when a drag moves the card, so the click that ends a swipe doesn't toggle details. */
+let lastDragAt = 0;
+const CLICK_AFTER_DRAG_MS = 350;
+const FRONT_CHIPS = 4;
+
+/**
+ * A card fits the screen without scrolling: photos, name, key facts, what they offer and a line
+ * from Google. Tap the text to expand the details in place (photos shrink to a strip).
+ */
+export function CardFace({ card, diets, stamp }: { card: Card; diets: DietId[]; stamp?: string | null }) {
   const r = card.r;
+  const [expanded, setExpanded] = useState(false);
   const subtitle = [r.typeLabel, r.area].filter(Boolean).join(' · ');
+  const line = frontLine(card);
+  const description = r.id.startsWith('g:') ? r.summary : '';
+  const chips = [...new Set([...r.serves, ...r.features])].filter((x) => x.toLowerCase() !== r.food.toLowerCase());
+  const quote = description && description !== line ? description : r.review ? `“${r.review.text}”` : '';
+  const toggle = () => {
+    if (Date.now() - lastDragAt < CLICK_AFTER_DRAG_MS) return;
+    setExpanded((x) => !x);
+  };
   return (
     <>
       <span class="tape tape-l" aria-hidden="true" />
       <span class="tape tape-r" aria-hidden="true" />
-      <div class={`card-art ${r.photos.length ? 'has-photo' : ''}`}>
+      <div class={`card-art ${r.photos.length ? 'has-photo' : ''} ${expanded ? 'is-strip' : ''}`}>
         {r.photos.length ? <Gallery key={r.id} r={r} /> : <FoodArt kind={r.art} label={`Illustration for ${r.name}`} />}
         {stamp && (
           <div class="stamp" role="status">
@@ -124,43 +141,55 @@ export function CardFace({ card, diets, stamp, onInfo }: { card: Card; diets: Di
           </div>
         )}
       </div>
-      <div class="card-text">
-        <div class="title-row">
+      <div class={`card-text ${expanded ? 'is-expanded' : ''}`}>
+        <button type="button" class="card-toggle" aria-expanded={expanded} onClick={toggle}>
           <h2 class="card-title">
             {r.name}
             {subtitle && <span class="at">{subtitle}</span>}
           </h2>
-          {onInfo && (
-            <button type="button" class="info-btn" aria-label={`More about ${r.name}`} onClick={onInfo}>
-              <Icon name="info" size={20} />
-            </button>
+          <Meta r={r} />
+          {line && (
+            <span class="why-line">
+              <span aria-hidden="true">→ </span>
+              {line}
+            </span>
           )}
-        </div>
-        <Meta r={r} />
-        {frontLine(card) && (
-          <p class="why-line">
-            <span aria-hidden="true">→ </span>
-            {frontLine(card)}
-          </p>
-        )}
-        {diets.length > 0 && <p class={`diet-line diet-${card.diet.status}`}>{dietLine(card, diets)}</p>}
-        {diets.length === 0 && card.headsUp[0] && <p class="diet-line diet-unverified">{card.headsUp[0]}</p>}
+          {!expanded && chips.length > 0 && (
+            <span class="front-chips">
+              {chips.slice(0, FRONT_CHIPS).map((x) => (
+                <span key={x}>{x}</span>
+              ))}
+            </span>
+          )}
+          {!expanded && quote && <span class="front-quote">{quote}</span>}
+          {diets.length > 0 && <span class={`diet-line diet-${card.diet.status}`}>{dietLine(card, diets)}</span>}
+          {diets.length === 0 && card.headsUp[0] && <span class="diet-line diet-unverified">{card.headsUp[0]}</span>}
+          <span class="more-hint" aria-hidden="true">
+            {expanded ? 'Show less ▴' : 'More ▾'}
+          </span>
+        </button>
+        {expanded && <CardDetails card={card} diets={diets} />}
       </div>
     </>
   );
 }
 
-/** Everything else about a place, in a sheet: description, offerings, review, diet notes. */
+/** The expanded part: description, everything they offer, reasons, review, diet notes, source. */
 export function CardDetails({ card, diets }: { card: Card; diets: DietId[] }) {
   const r = card.r;
   const description = r.id.startsWith('g:') ? r.summary : '';
   const chips = [...new Set([...r.serves, ...r.features])];
   return (
     <div class="details">
-      {r.photos.length > 0 && <Gallery r={r} />}
-      <p class="details-sub">{[r.typeLabel, r.address || r.area].filter(Boolean).join(' · ')}</p>
-      <Meta r={r} />
       {description && <p class="pitch">{description}</p>}
+      {r.address && <p class="details-sub">{r.address}</p>}
+      {chips.length > 0 && (
+        <ul class="serves" aria-label="What they offer">
+          {chips.map((x) => (
+            <li key={x}>{x}</li>
+          ))}
+        </ul>
+      )}
       <section class="why" aria-label="Why this, today">
         <h3>Why this, today</h3>
         <ul>
@@ -169,13 +198,6 @@ export function CardDetails({ card, diets }: { card: Card; diets: DietId[] }) {
           ))}
         </ul>
       </section>
-      {chips.length > 0 && (
-        <ul class="serves" aria-label="What they offer">
-          {chips.map((x) => (
-            <li key={x}>{x}</li>
-          ))}
-        </ul>
-      )}
       {r.review && (
         <blockquote class="review">
           “{r.review.text}”<cite>— {r.review.author} on Google</cite>
@@ -190,13 +212,17 @@ export function CardDetails({ card, diets }: { card: Card; diets: DietId[] }) {
           </span>
         </p>
       )}
+      <a class="btn btn-ghost btn-sm" href={r.mapsUrl} target="_blank" rel="noopener noreferrer">
+        <Icon name="map" size={16} />
+        <span>Open in Google Maps</span>
+      </a>
       <p class="fine">{r.id.startsWith('g:') ? 'Details from Google Maps.' : 'Map data © OpenStreetMap contributors. Reviews, hours and prices are on Google Maps.'}</p>
     </div>
   );
 }
 
 /** The top card of the deck: drag it left (skip) or right (let's go). */
-export function SwipeCard({ card, diets, onSwipe, onInfo }: { card: Card; diets: DietId[]; onSwipe: (dir: SwipeDir) => void; onInfo: () => void }) {
+export function SwipeCard({ card, diets, onSwipe }: { card: Card; diets: DietId[]; onSwipe: (dir: SwipeDir) => void }) {
   const [dx, setDx] = useState(0);
   // Pointer events can outrun re-renders on a quick flick, so read the live value from a ref.
   const dxRef = useRef(0);
@@ -233,6 +259,7 @@ export function SwipeCard({ card, diets, onSwipe, onInfo }: { card: Card; diets:
       return;
     }
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    lastDragAt = Date.now();
     moveTo(moveX);
   };
   const onUp = () => {
@@ -269,7 +296,7 @@ export function SwipeCard({ card, diets, onSwipe, onInfo }: { card: Card; diets:
       <span class="swipe-label swipe-yes" style={{ opacity: yes }} aria-hidden="true">
         Let's go!
       </span>
-      <CardFace card={card} diets={diets} onInfo={onInfo} />
+      <CardFace card={card} diets={diets} />
     </article>
   );
 }

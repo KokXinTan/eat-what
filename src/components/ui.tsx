@@ -32,6 +32,7 @@ const ICONS = {
   undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3',
   chevron: 'M6 9l6 6 6-6',
   info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v6M12 7.5v.5',
+  cards: 'M8 4h11a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM4 7.5l3 -.8M4 7.5l2.5 11.5 1.2-.3',
 } as const;
 
 export type IconName = keyof typeof ICONS;

@@ -1,6 +1,6 @@
 # Eat What?
 
-Can't decide where to eat? Tap **Surprise me** and swipe through what's good nearby —
+Can't decide where to eat? Tap **Start swiping** and go through what's good nearby —
 **right** to go, **left** to skip. One painted card at a time, each with a short
 "why this, today".
 
