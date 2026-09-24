@@ -5,7 +5,7 @@ import { CardFace, SwipeCard, type SwipeDir } from './components/SwipeCard';
 import { JoinScreen, RoomScreen } from './components/RoomScreen';
 import { Button, Icon, PillSelect, Sheet } from './components/ui';
 import { DIETS, dietQuery } from './lib/diet';
-import { AccessCodeError, currentSource, findRestaurants, geocode, getLocation, PROXY_URL, setAccessCode, type LatLng } from './lib/places';
+import { AccessCodeError, currentSource, findRestaurants, geocode, getLocation, PROXY_URL, setAccessCode, takeCodeFromLink, type LatLng } from './lib/places';
 import { buildDeck, effectiveConstraints, type Card } from './lib/rank';
 import { play } from './lib/sound';
 import { STORAGE_KEY, loadData, newId, saveData } from './lib/storage';
@@ -64,6 +64,11 @@ export function App() {
   const toastTimer = useRef<number>();
 
   useEffect(() => setStorageOk(saveData(data)), [data]);
+  // A personal setup link (#code=…) unlocks Google data on this phone in one tap.
+  useEffect(() => {
+    if (takeCodeFromLink()) toast('Access code saved on this phone — Google photos & ratings unlocked');
+  }, []);
+
   // Another tab saved newer data: pick it up instead of overwriting it later.
   useEffect(() => {
     const onStorage = (e: StorageEvent) => e.key === STORAGE_KEY && setData(loadData());

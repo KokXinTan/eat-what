@@ -50,7 +50,6 @@ body {
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .32 0 0 0 0 .22 0 0 0 0 .12 .55 0 0 0 -.2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
     radial-gradient(60vmax 40vmax at 110% -10%, rgba(227, 167, 47, 0.22), transparent 70%),
     radial-gradient(50vmax 40vmax at -20% 105%, rgba(110, 120, 72, 0.18), transparent 70%);
-  background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
@@ -363,9 +362,7 @@ main {
   box-shadow: 0 1px 0 var(--btn-edge);
   transform: translateY(5px);
 }
-.btn-surprise .icon {
-  animation: twinkle 2.8s ease-in-out infinite;
-}
+
 .where {
   display: flex;
   gap: 8px;
@@ -420,6 +417,9 @@ main {
 .card.is-top {
   cursor: grab;
   z-index: 2;
+  /* Own GPU layer: moving the card doesn't repaint its photos or painted art. */
+  will-change: transform;
+  transform: translate3d(0, 0, 0);
 }
 .card.is-top:active {
   cursor: grabbing;
@@ -430,7 +430,7 @@ main {
 .card.is-next {
   z-index: 1;
   transform: translateY(10px) scale(0.95) rotate(1.5deg);
-  filter: saturate(0.75) brightness(0.97);
+  opacity: 0.85;
   pointer-events: none;
 }
 .card.is-chosen {
@@ -464,9 +464,7 @@ main {
   aspect-ratio: 1;
   pointer-events: none;
 }
-.is-top .card-art svg {
-  animation: art-pop 0.6s 0.1s var(--ease-pop) both;
-}
+
 .photo {
   position: relative;
   margin: 0;
@@ -474,6 +472,7 @@ main {
 }
 .mosaic {
   position: relative;
+  cursor: pointer;
   display: grid;
   gap: 4px;
   height: min(30dvh, 260px);
@@ -688,6 +687,7 @@ main {
 }
 
 .swipe-label {
+  opacity: 0;
   position: absolute;
   top: 26px;
   z-index: 3;
@@ -1127,15 +1127,6 @@ main {
 
 /* ---------- Motion ---------- */
 
-.art-steam path {
-  animation: steam 3.2s ease-in-out infinite;
-}
-.art-steam path:nth-child(2) {
-  animation-delay: -1s;
-}
-.art-steam path:nth-child(3) {
-  animation-delay: -2s;
-}
 
 @keyframes steam {
   0%, 100% { transform: translateY(0); opacity: 0.8; }
@@ -1323,7 +1314,7 @@ main {
   bottom: 0;
   border: none;
   background: transparent;
-  cursor: pointer;
+  pointer-events: none;
   -webkit-tap-highlight-color: transparent;
 }
 .photo-prev {

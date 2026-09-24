@@ -28,6 +28,19 @@ export function setAccessCode(code: string) {
   }
 }
 
+/**
+ * A personal setup link (…/eat-what/#code=YOUR-CODE) saves the code on this phone, then removes
+ * it from the address bar. Returns true if a code was saved.
+ */
+export function takeCodeFromLink(): boolean {
+  const m = location.hash.match(/(?:^#|&)code=([A-Za-z0-9_-]{3,64})/);
+  if (!m) return false;
+  setAccessCode(m[1]);
+  const rest = location.hash.replace(/(?:^#|&)code=[A-Za-z0-9_-]+/, '').replace(/^&/, '');
+  history.replaceState(null, '', location.pathname + location.search + (rest ? `#${rest}` : ''));
+  return true;
+}
+
 /** Google when a Worker is configured and this browser has an access code. */
 export function currentSource(): 'google' | 'osm' {
   return PROXY_URL && getAccessCode() ? 'google' : 'osm';
@@ -360,6 +373,7 @@ async function searchGoogle(center: LatLng, radius: number, textQuery: string | 
 // ---------- shared entry point with a short cache ----------
 
 const CACHE_MS = 30 * 60_000;
+const RETRY_DELAY_MS = 2500;
 const CACHE_PREFIX = 'eat-what:places:';
 
 // Google's terms restrict storing Places content, so Google results stay in memory for this
@@ -399,7 +413,17 @@ export async function findRestaurants(center: LatLng, distance: Distance, textQu
   const key = `${source}:${center.lat.toFixed(3)},${center.lng.toFixed(3)}:${radius}:${source === 'google' ? textQuery ?? '' : ''}`;
   const cached = readCache(key);
   if (cached) return cached;
-  const list = (source === 'google' ? await searchGoogle(center, radius, textQuery) : await searchOsm(center, radius)).filter(
+  const search = source === 'google' ? () => searchGoogle(center, radius, textQuery) : () => searchOsm(center, radius);
+  let found: Restaurant[];
+  try {
+    found = await search();
+  } catch (err) {
+    // The free/public servers are sometimes briefly busy: wait a moment and try once more.
+    if (err instanceof AccessCodeError) throw err;
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+    found = await search();
+  }
+  const list = found.filter(
     (r) => r.distanceM <= radius * 1.2,
   );
   writeCache(key, list);
